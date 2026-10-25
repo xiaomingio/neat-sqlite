@@ -1,0 +1,79 @@
+{
+  "name": "neat-sqlite",
+  "displayName": "Neat SQLite - Database Editor",
+  "description": "Browse SQLite tables and safely edit records with staged changes and transaction saves.",
+  "version": "0.1.2",
+  "publisher": "xiaomingio",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0",
+    "node": ">=20.17.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "neat-sqlite.editor",
+        "displayName": "Neat SQLite",
+        "selector": [
+          {
+            "filenamePattern": "*.sqlite"
+          },
+          {
+            "filenamePattern": "*.sqlite3"
+          },
+          {
+            "filenamePattern": "*.db"
+          },
+          {
+            "filenamePattern": "*.db3"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "neat-sqlite.open",
+        "title": "Neat SQLite: Open Database"
+      }
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build.mjs",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:ui": "npm run build && playwright test",
+    "vscode:prepublish": "npm run typecheck && npm run build",
+    "package": "node scripts/package.mjs",
+    "sample": "node scripts/create-sample.mjs"
+  },
+  "dependencies": {
+    "re2js": "^2.9.0",
+    "sqlite3": "^6.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "keywords": [
+    "sqlite",
+    "database",
+    "table",
+    "editor"
+  ],
+  "overrides": {
+    "@azure/identity": {
+      "@azure/msal-node": "^7.1.1"
+    }
+  }
+}
