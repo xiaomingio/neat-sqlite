@@ -1,5 +1,6 @@
 .git/**
 .gitignore
+AGENTS.md
 src/**
 tests/**
 scripts/**
@@ -23,3 +24,13 @@ node_modules/**
 !node_modules/file-uri-to-path/index.js
 !node_modules/file-uri-to-path/LICENSE
 !node_modules/re2js/LICENSE
+assets/**
+!assets/icon.png
+!node_modules/@codemirror/*/LICENSE
+!node_modules/@lezer/*/LICENSE
+!node_modules/@marijn/find-cluster-break/LICENSE
+!node_modules/style-mod/LICENSE
+!node_modules/w3c-keyname/LICENSE
+!node_modules/crelt/LICENSE
+!node_modules/csv-parse/LICENSE
+!node_modules/jsonc-parser/LICENSE.md

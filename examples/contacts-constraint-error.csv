@@ -1,0 +1,3 @@
+name,email,age,balance,notes
+First duplicate,duplicate@example.com,25,10,Valid types but duplicate email
+Second duplicate,duplicate@example.com,26,20,Save must reject the UNIQUE violation

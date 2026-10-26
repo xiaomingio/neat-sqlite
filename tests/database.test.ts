@@ -74,7 +74,7 @@ test('staged changes participate in SQL filters, sorting, undo and redo', async 
     await engine.undo(); assert.equal((await engine.page(query())).rows[0]!.values[1]!.value, 'alpha');
     await engine.redo(); assert.equal((await engine.page(query())).rows[0]!.values[1]!.value, 'zeta');
     await engine.edit([{ kind: 'insert', table: 'items', values: { name: text('aardvark') } }]);
-    assert.equal((await engine.page({ ...query(), sort: { column: 'name', direction: 'ASC' } })).rows[0]!.values[1]!.value, 'aardvark');
+    assert.equal((await engine.page({ ...query(), sort: [{ column: 'name', direction: 'ASC' }] })).rows[0]!.values[1]!.value, 'aardvark');
     await engine.save(); assert.equal(engine.status().pending, 0);
     assert.equal((await engine.page(query())).rows.length, 3);
   });
@@ -407,10 +407,20 @@ test('custom SQL rejects implicit table reads through SQLite IN shorthand', asyn
 test('equal sort values retain natural numeric identity order in both directions', async () => {
   await fixture("CREATE TABLE items(id INTEGER PRIMARY KEY,name TEXT); INSERT INTO items VALUES(1,'same'),(2,'same'),(10,'same');", async engine => {
     for(const direction of ['ASC','DESC'] as const) {
-      assert.deepEqual((await engine.page({...query(),sort:{column:'name',direction}})).rows.map(row=>row.values[0]!.value),['1','2','10']);
+      assert.deepEqual((await engine.page({...query(),sort:[{column:'name',direction}]})).rows.map(row=>row.values[0]!.value),['1','2','10']);
     }
     const row=(await engine.page(query())).rows[1]!;
     await engine.edit([{kind:'update',table:'items',key:row.key,column:'name',value:text('other')}]);
-    assert.deepEqual((await engine.page({...query(),sort:{column:'id',direction:'ASC'}})).rows.map(row=>row.values[0]!.value),['1','2','10']);
+    assert.deepEqual((await engine.page({...query(),sort:[{column:'id',direction:'ASC'}]})).rows.map(row=>row.values[0]!.value),['1','2','10']);
+  });
+});
+
+test('multiple sort keys apply in order and reject duplicate or excessive keys', async () => {
+  await fixture("CREATE TABLE items(id INTEGER PRIMARY KEY, team TEXT, score INTEGER); INSERT INTO items VALUES(1,'b',2),(2,'a',1),(3,'b',5),(4,'a',3),(5,'b',5);", async engine => {
+    const ids = async (sort: { column: string; direction: 'ASC' | 'DESC' }[]) => (await engine.page({ ...query(), sort })).rows.map(row => row.values[0]!.value);
+    assert.deepEqual(await ids([{ column: 'team', direction: 'ASC' }, { column: 'score', direction: 'DESC' }]), ['4', '2', '3', '5', '1']);
+    assert.deepEqual(await ids([{ column: 'score', direction: 'DESC' }, { column: 'team', direction: 'ASC' }]), ['3', '5', '4', '1', '2']);
+    await assert.rejects(ids([{ column: 'team', direction: 'ASC' }, { column: 'team', direction: 'DESC' }]), /only once/);
+    await assert.rejects(ids(Array.from({ length: 17 }, () => ({ column: 'team', direction: 'ASC' as const }))), /at most 16/);
   });
 });

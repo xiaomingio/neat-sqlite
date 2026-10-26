@@ -4,6 +4,7 @@ Purpose: Build typed per-column filters and preview their shared SQL compilation
 import type { ColumnFilter, DistinctValue, Query, Table, Value } from '../protocol';
 import { compileFilters } from '../ColumnFilter';
 import { button, element } from './Dialog';
+import { setIcon } from './Icons';
 import type { HostClient } from './HostClient';
 import type { Locale } from './Locale';
 type Mode = ColumnFilter['mode'];
@@ -26,7 +27,7 @@ export class ColumnFilterPanel {
     this.mode.setAttribute('aria-label', this.t('Filter type'));
     for (const [value, text] of [['text', 'Text'], ['regex', 'Regular expression'], ['values', 'Values'], ['number', 'Number'], ['empty', 'Empty'], ['notEmpty', 'Not empty'], ['custom', 'Custom']]) { const option = element('option', '', this.t(text!)); option.value = value!; this.mode.append(option); }
     this.mode.value = active?.mode ?? 'text'; this.mode.onchange = () => { this.error.textContent = ''; this.draw(); };
-    const heading = element('header', 'filter-heading'); heading.append(element('strong', '', `${this.t('Column filter')} · ${column}`), button('×', close, 'icon-button'));
+    const heading = element('header', 'filter-heading'); heading.append(element('strong', '', `${this.t('Column filter')} · ${column}`), button('', close, 'icon-button')); setIcon(heading.lastElementChild as HTMLButtonElement, 'close');
     (heading.lastElementChild as HTMLButtonElement).setAttribute('aria-label', this.t('Close'));
     const typeLabel = element('label', 'filter-field', this.t('Filter')); typeLabel.append(this.mode);
     const previewHeading = element('strong', '', this.t('Generated SQL')); this.preview.setAttribute('aria-label', this.t('Generated SQL'));
@@ -35,7 +36,7 @@ export class ColumnFilterPanel {
     this.apply = button(this.t('Apply'), () => this.submit(this.draft, close), 'primary'); actions.append(reset, this.apply);
     this.root.append(heading, typeLabel, this.controls, previewHeading, this.preview, this.note, this.error, actions);
     this.draw();
-    this.root.onkeydown = event => { if (event.key === 'Escape') { event.preventDefault(); close(); } else if (event.key === 'Enter' && !event.shiftKey && !(event.target instanceof HTMLTextAreaElement)) { event.preventDefault(); this.apply.click(); } };
+    this.root.onkeydown = event => { if (event.key === 'Escape') { event.preventDefault(); close(); } else if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229 && !(event.target instanceof HTMLTextAreaElement)) { event.preventDefault(); if (!this.apply.disabled) this.apply.click(); } };
   }
   private t(text: string): string { return this.locale.t(text); }
   private get draft(): ColumnFilter {
@@ -98,8 +99,7 @@ export class ColumnFilterPanel {
     const filters = [...(this.query.filters ?? []).filter(filter => filter.column !== this.column), this.draft];
     try {
       const compiled = compileFilters(filters, this.table.columns.map(column => column.name), this.table.name);
-      const order = this.query.sort ? ` ORDER BY ${this.quote(this.query.sort.column)} ${this.query.sort.direction}` : '';
-      this.preview.textContent = `SELECT * FROM ${this.quote(this.table.name)} WHERE ${compiled.preview}${order};`;
+      this.preview.textContent = compiled.preview;
       this.note.textContent = this.draft.mode === 'regex' || compiled.regex.length ? this.t('SQL preview shows the prefilter. RE2 regular expressions are evaluated by the editor after SQL, before pagination.') : '';
     } catch (error) { this.preview.textContent = error instanceof Error ? error.message : String(error); }
   }

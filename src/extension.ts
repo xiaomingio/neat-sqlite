@@ -3,8 +3,9 @@ Purpose: Register the SQLite custom editor and connect document lifecycle, nativ
 */
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { DatabaseDestination } from './DatabaseDestination';
+import { CsvImport } from './CsvImport';
 import { SqliteDocument } from './SqliteDocument';
 import type { Action, Request, Response, Result } from './protocol';
 
@@ -30,7 +31,7 @@ class SqliteEditorProvider implements vscode.CustomEditorProvider<SqliteDocument
     const nonce = randomBytes(24).toString('hex');
     const script = webview.asWebviewUri(vscode.Uri.joinPath(dist, 'grid.js'));
     const css = webview.asWebviewUri(vscode.Uri.joinPath(dist, 'style.css'));
-    webview.html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:;"><link rel="stylesheet" href="${css}"><title>Neat SQLite</title></head><body><div id="app"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
+    webview.html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:;"><meta name="csp-nonce" content="${nonce}"><link rel="stylesheet" href="${css}"><title>Neat SQLite</title></head><body><div id="app"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
     const post = (message: Response) => { void webview.postMessage(message); };
     document.notify = () => post({ event: 'status', status: document.database.status() });
     let flush: Flush | undefined;
@@ -60,6 +61,9 @@ class SqliteEditorProvider implements vscode.CustomEditorProvider<SqliteDocument
       if (!request.action || typeof request.action !== 'object' || typeof request.action.type !== 'string') return;
       try {
         if (JSON.stringify(request).length > 16 * 1024 * 1024) throw new Error('This operation exceeds the 16 MiB message limit.');
+        if (request.action.type === 'sqlCancel') {
+          document.database.sqlCancel(); post({ id: request.id, result: { status: document.database.status() } }); return;
+        }
         if (request.action.type === 'save') {
           // VS Code owns dirty-state transitions and invokes saveCustomDocument.
           await vscode.commands.executeCommand('workbench.action.files.save');
@@ -83,18 +87,43 @@ class SqliteEditorProvider implements vscode.CustomEditorProvider<SqliteDocument
     });
   }
 
+  private recordEdit(document: SqliteDocument, label: string): void {
+    const epoch = document.epoch;
+    const checkEpoch = () => { if (epoch !== document.epoch) throw new Error('Undo is available for changes made since the last save or revert.'); };
+    this.changed.fire({ document, label, undo: () => document.run(async () => { checkEpoch(); await document.database.undo(); document.notify?.(); }), redo: () => document.run(async () => { checkEpoch(); await document.database.redo(); document.notify?.(); }) });
+  }
+
   private async handle(document: SqliteDocument, action: Action): Promise<Result> {
     const database = document.database;
     let result: Omit<Result, 'status'> = {};
     switch (action.type) {
+      case 'foreignRecord': result.related = await database.foreignRecord(action.table, action.key, action.foreignKey); break;
+      case 'sqlCancel': database.sqlCancel(); break;
+      case 'sqlQuery': result.sql = await database.sqlQuery(action.sql, action.limit); break;
+      case 'sqlExport': {
+        const text = database.sqlExport(action.sql, action.limit);
+        const target = await vscode.window.showSaveDialog({ saveLabel: 'Export Query CSV', filters: { CSV: ['csv'] } });
+        if (target) { if (target.scheme !== 'file') throw new Error('Choose a local destination.'); await DatabaseDestination.validate(document.uri.fsPath, target.fsPath); await writeFile(target.fsPath, text, 'utf8'); }
+        break;
+      }
+      case 'sqlWrite': result.changes = await database.sqlWrite(action.sql); document.epoch++; result.tables = await database.metadata(); document.notify?.(); break;
+      case 'csvRead': {
+        const files = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { CSV: ['csv'] } });
+        if (files?.[0]) { if (files[0].scheme !== 'file') throw new Error('Choose a local CSV file.'); if ((await stat(files[0].fsPath)).size > 8 * 1024 * 1024) throw new Error('Import CSV files of at most 8 MiB.'); result.text = await readFile(files[0].fsPath, 'utf8'); }
+        break;
+      }
+      case 'csvPreview': result.csv = new CsvImport(action.text).preview(); break;
+      case 'csvImport': result.changes = await database.csvImport(action.table, action.text, action.mapping, action.nullToken); if (result.changes) this.recordEdit(document, 'Import CSV records'); break;
+      case 'find': case 'replacePreview': case 'replaceApply': result.search = await database.search(action, action.type); if (result.search.changes) this.recordEdit(document, 'Replace SQLite values'); break;
+      case 'searchLocate': result.located = await database.searchLocate(action.token, action.key, action.column, action.limit); break;
+      case 'maintenance': result.report = await database.maintenance(action.operation); if (action.operation === 'vacuum') { document.epoch++; document.notify?.(); } break;
+      case 'count': result.count = await database.count(action.query); break;
       case 'metadata': result.tables = await database.metadata(); break;
       case 'page': result.page = await database.page(action.query); break;
       case 'distinct': result.distinct = await database.distinct(action.table, action.column); break;
       case 'edit': {
         await database.edit(action.edits);
-        const epoch = document.epoch;
-        const checkEpoch = () => { if (epoch !== document.epoch) throw new Error('Undo is available for changes made since the last save or revert.'); };
-        this.changed.fire({ document, label: 'Edit SQLite records', undo: () => document.run(async () => { checkEpoch(); await database.undo(); document.notify?.(); }), redo: () => document.run(async () => { checkEpoch(); await database.redo(); document.notify?.(); }) });
+        this.recordEdit(document, 'Edit SQLite records');
         break;
       }
       case 'discard':

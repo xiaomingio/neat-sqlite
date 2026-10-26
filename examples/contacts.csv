@@ -1,0 +1,6 @@
+name,email,age,balance,notes
+Dana Wu,dana@example.com,31,125.5,"First line
+Second line"
+Émile Laurent,emile@example.com,42,0,"Contains a comma, and a ""quote"""
+李明,liming@example.com,28,18.75,你好 · café · 東京
+No age,no-age@example.com,\N,0,

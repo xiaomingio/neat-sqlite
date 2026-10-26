@@ -2,12 +2,15 @@
 Purpose: Browse SQLite files and stage lossless edits for conflict-checked atomic saves.
 */
 import sqlite3 from 'sqlite3';
+import { SqlQuery, singleStatement } from './SqlQuery';
+import { CellSearch, type SearchMatch } from './CellSearch';
+import { CsvImport } from './CsvImport';
 import { RE2JS } from 're2js';
 import { compileFilters } from './ColumnFilter';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { open, realpath, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import type { Column, Edit, Page, Query, Row, Status, Table, Value, DistinctValue } from './protocol';
+import type { Column, Edit, Page, Query, Row, Status, Table, Value, DistinctValue, SqlResult, CsvMapping, DatabaseReport, RelatedRecord, SearchRequest, SearchResult, SearchHit, SearchLocation } from './protocol';
 
 type RecordData = Record<string, unknown>;
 type BackupHandle = { step(pages: number, callback: (error: Error | null) => void): void; finish(callback: (error: Error | null) => void): void };
@@ -18,13 +21,18 @@ const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 const same = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
 const nullValue = (): Value => ({ type: 'null', value: '' });
 const MAX_BYTES = 8 * 1024 * 1024;
+const MAX_SORT_KEYS = 16;
 
 export class SqliteDatabase {
   private tables = new Map<string, TableInfo>();
   private pending: Pending[] = [];
   private history: Pending[][] = [];
   private future: Pending[][] = [];
+  private readonly historySizes = new WeakMap<Pending[], number>();
   private readOnly = false;
+  private activeQuery?: SqlQuery;
+  private readonly searches = new CellSearch('snapshot', true);
+  private lastSqlResult?: { sql: string; limit: number; result: SqlResult };
   private observed = new Map<string, Value[]>();
   private observedBytes = 0;
   private constructor(private readonly db: sqlite3.Database, private readonly path: string) {}
@@ -180,9 +188,14 @@ export class SqliteDatabase {
     }).join(',');
   }
 
-  private decode(info: TableInfo, record: RecordData, index = 0): Row {
+  /** Index pending changes for one table so per-row decoding stays O(1). */
+  private pendingIndex(table: string): Map<string, Pending> {
+    return new Map(this.pending.filter(item => item.table === table).map(item => [item.key, item]));
+  }
+
+  private decode(info: TableInfo, record: RecordData, index = 0, pending = this.pendingIndex(info.table.name)): Row {
     const key = info.identity.length ? String(record.__key) : `view:${index}`;
-    const change = this.pending.find(item => item.table === info.table.name && item.key === key);
+    const change = pending.get(key);
     if (info.table.columns.some((_, index) => Number(record[`b${index}`]) > MAX_BYTES / 2)) throw new Error('A cell exceeds the 4 MiB browsing limit. Use a dedicated SQLite tool for this value.');
     const values: Value[] = info.table.columns.map((_, column) => ({ type: String(record[`t${column}`]) as Value['type'], value: record[`s${column}`] === null ? '' : String(record[`s${column}`]) }));
     return { key, values, modified: Boolean(change), inserted: Boolean(change && !change.original), deleted: false };
@@ -198,12 +211,18 @@ export class SqliteDatabase {
     const compiled = compileFilters(query.filters, columns.map(column => column.name), info.table.name, columns.map((_, index) => quote(`v${index}`)));
     const where = compiled.sql === '1' ? '' : ` WHERE ${compiled.sql}`;
     const params = compiled.params;
-    let order = info.identity.length ? ` ORDER BY ${info.identity.map((_, index) => quote(`__o${index}`)).join(',')}` : '';
-    if (query.sort) {
-      if (!['ASC', 'DESC'].includes(query.sort.direction)) throw new Error('Choose a valid sort direction.');
-      const ties = info.identity.map((_, index) => quote(`__o${index}`));
-      order = ` ORDER BY ${columnRef(query.sort.column)} ${query.sort.direction}${ties.length ? `, ${ties.join(',')}` : ''}`;
-    }
+    // Sort keys apply in the order the user added them; the row identity breaks remaining ties.
+    const sorts = query.sort ?? [];
+    if (!Array.isArray(sorts) || sorts.length > MAX_SORT_KEYS) throw new Error('Sort by at most 16 columns.');
+    const seen = new Set<string>();
+    const keys = sorts.map(sort => {
+      if (!sort || typeof sort.column !== 'string' || !['ASC', 'DESC'].includes(sort.direction)) throw new Error('Choose a valid sort direction.');
+      if (seen.has(sort.column)) throw new Error('Each column can appear only once in the sort order.');
+      seen.add(sort.column); return `${columnRef(sort.column)} ${sort.direction}`;
+    });
+    const ties = info.identity.map((_, index) => quote(`__o${index}`));
+    const terms = [...keys, ...ties];
+    const order = terms.length ? ` ORDER BY ${terms.join(', ')}` : '';
     return { where, order, params, regex: compiled.regex };
   }
 
@@ -258,7 +277,7 @@ export class SqliteDatabase {
       if (Number(record.b0) > 65536) throw new Error('A distinct value exceeds 65,536 bytes. Use another filter mode.');
       const count = Number(record.__count);
       if (!Number.isSafeInteger(count)) throw new Error('A distinct value count exceeds the supported range.');
-      return { value: this.decode(single, record).values[0]!, count };
+      return { value: this.decode(single, record, 0, new Map()).values[0]!, count };
     });
   }
 
@@ -272,7 +291,8 @@ export class SqliteDatabase {
       return this.all(`${sql} LIMIT ? OFFSET ?`, [...source.params, ...parts.params, query.limit + 1, query.offset]);
     }, Boolean(query.filters?.some(filter => filter.mode === 'custom')));
     if (Buffer.byteLength(JSON.stringify(records)) > MAX_BYTES) throw new Error('This page exceeds 8 MiB. Reduce the page size or export the data with another tool.');
-    const rows = records.slice(0, query.limit).map((record, index) => this.decode(info, record, query.offset + index));
+    const pending = this.pendingIndex(info.table.name);
+    const rows = records.slice(0, query.limit).map((record, index) => this.decode(info, record, query.offset + index, pending));
     if (info.table.editable) for (const row of rows.filter(row => !row.modified)) {
       const id = JSON.stringify([query.table, row.key]);
       const previous = this.observed.get(id);
@@ -285,7 +305,8 @@ export class SqliteDatabase {
         this.observed.delete(oldest);
       }
     }
-    return { rows, hasMore: records.length > query.limit, offset: query.offset };
+    const page = { rows, hasMore: records.length > query.limit, offset: query.offset };
+    this.searches.rememberPage(query, page, info.schema); return page;
   }
 
   private async original(info: TableInfo, key: string): Promise<Value[]> {
@@ -293,12 +314,16 @@ export class SqliteDatabase {
     const identity = this.identityWhere(info, key, true);
     const records = await this.all(`WITH data AS (${source.sql}) SELECT __key, ${this.projection(info)} FROM data WHERE ${identity.sql}`, identity.params);
     if (records.length !== 1) throw new Error('The record changed or was removed. Refresh before editing.');
-    return this.decode(info, records[0]!).values;
+    return this.decode(info, records[0]!, 0, new Map()).values;
   }
 
   async edit(edits: Edit[]): Promise<void> {
     if (!Array.isArray(edits) || !edits.length || edits.length > 10000) throw new Error('Edit between 1 and 10,000 cells at a time.');
     const before = structuredClone(this.pending);
+    // Key pending records once so large batches avoid a linear search per edited cell.
+    const recordId = (table: string, key: string): string => JSON.stringify([table, key]);
+    const staged = new Map(this.pending.map(item => [recordId(item.table, item.key), item]));
+    const remove = (change: Pending): void => { this.pending = this.pending.filter(item => item !== change); staged.delete(recordId(change.table, change.key)); };
     try {
       for (const edit of edits) {
         const info = this.info(edit.table);
@@ -310,16 +335,16 @@ export class SqliteDatabase {
           this.pending.push({ schema: info.schema, table: edit.table, key: `new:${randomUUID()}`, values: structuredClone(edit.values), deleted: false });
         } else {
           if (typeof edit.key !== 'string') throw new Error('Choose a valid record.');
-          let change = this.pending.find(item => item.table === edit.table && item.key === edit.key);
+          let change = staged.get(recordId(edit.table, edit.key));
           if (!change) {
-            const observed = this.observed.get(JSON.stringify([edit.table, edit.key]));
+            const observed = this.observed.get(recordId(edit.table, edit.key));
             if (!observed) throw new Error('Reload this page before editing the record.');
             if (!same(observed, await this.original(info, edit.key))) throw new Error('This record changed after it was displayed. Refresh before editing.');
-            change = { schema: info.schema, table: edit.table, key: edit.key, original: structuredClone(observed), values: {}, deleted: false }; this.pending.push(change);
+            change = { schema: info.schema, table: edit.table, key: edit.key, original: structuredClone(observed), values: {}, deleted: false }; this.pending.push(change); staged.set(recordId(edit.table, edit.key), change);
           }
           if (edit.kind === 'delete') {
             if (change.original) change.deleted = true;
-            else this.pending = this.pending.filter(item => item !== change);
+            else remove(change);
           } else {
             this.writableColumn(info, edit.column); this.validateValue(edit.value);
             if (change.deleted) throw new Error('Undo the record deletion before editing it.');
@@ -327,12 +352,12 @@ export class SqliteDatabase {
             if (change.original?.[index]?.type === 'blob') throw new Error('BLOB values are read-only.');
             if (same(edit.value, change.original?.[index])) delete change.values[edit.column];
             else change.values = { ...change.values, [edit.column]: structuredClone(edit.value) };
-            if (change.original && !Object.keys(change.values).length) this.pending = this.pending.filter(item => item !== change);
+            if (change.original && !Object.keys(change.values).length) remove(change);
           }
         }
       }
       if (this.pending.length > 10000 || Buffer.byteLength(JSON.stringify(this.pending)) > MAX_BYTES) throw new Error('Pending edits exceed 10,000 records or 8 MiB. Save a smaller batch.');
-      this.history.push(before); this.future = []; this.trimHistory();
+      this.historySizes.delete(this.pending); this.history.push(before); this.future = []; this.trimHistory();
     } catch (error) { this.pending = before; throw error; }
   }
 
@@ -341,9 +366,16 @@ export class SqliteDatabase {
     if (!column || column.generated) throw new Error('Choose an editable column. Generated columns are read-only.');
   }
 
+  /** History states are replaced, never mutated, so their serialized size is measured once. */
+  private stateBytes(state: Pending[]): number {
+    let bytes = this.historySizes.get(state);
+    if (bytes === undefined) { bytes = Buffer.byteLength(JSON.stringify(state)); this.historySizes.set(state, bytes); }
+    return bytes;
+  }
+
   private trimHistory(): void {
-    let bytes = this.history.reduce((total, state) => total + Buffer.byteLength(JSON.stringify(state)), 0);
-    while (this.history.length > 1 && (this.history.length > 100 || bytes > 32 * 1024 * 1024)) bytes -= Buffer.byteLength(JSON.stringify(this.history.shift()));
+    let bytes = this.history.reduce((total, state) => total + this.stateBytes(state), 0);
+    while (this.history.length > 1 && (this.history.length > 100 || bytes > 32 * 1024 * 1024)) bytes -= this.stateBytes(this.history.shift()!);
   }
 
   async undo(): Promise<void> { const state = this.history.pop(); if (state) { this.future.push(this.pending); this.pending = state; } }
@@ -390,12 +422,202 @@ export class SqliteDatabase {
     await this.loadMetadata(); this.observed.clear(); this.observedBytes = 0;
   }
 
+  async sqlQuery(sql: string, limit?: number): Promise<SqlResult> {
+    if (this.activeQuery) throw new Error('A SQL query is already running.');
+    const query = new SqlQuery(); this.activeQuery = query;
+    try { const result = await query.execute(this.path, sql, limit); this.lastSqlResult = { sql, limit: limit ?? 1000, result: structuredClone(result) }; return result; }
+    finally { this.activeQuery = undefined; }
+  }
+  sqlExport(sql: string, limit = 1000): string {
+    const cached = this.lastSqlResult;
+    if (!cached || cached.sql !== sql || cached.limit !== limit) throw new Error('Run the current SQL and result limit before exporting.');
+    return SqlQuery.csv(cached.result);
+  }
+  sqlCancel(): void { this.activeQuery?.cancel(); }
+
+  /** Explicit writes commit independently; pending editor edits must be resolved first. */
+  async sqlWrite(input: string): Promise<number> {
+    if (this.readOnly) throw new Error('Database is read-only.');
+    if (this.pending.length) throw new Error('Save or discard pending edits before executing SQL writes.');
+    const { sql, words } = singleStatement(input);
+    const first = words[0]; const second = words[1] === 'UNIQUE' ? words[2] : words[1];
+    if (!['INSERT', 'UPDATE', 'DELETE', 'REPLACE'].includes(first!) && !(first === 'CREATE' && ['TABLE', 'VIEW', 'INDEX'].includes(second!)) && !(first === 'ALTER' && second === 'TABLE') && !(first === 'DROP' && ['VIEW', 'INDEX'].includes(second!))) throw new Error('Execute one INSERT, UPDATE, DELETE, REPLACE, CREATE TABLE/VIEW/INDEX, ALTER TABLE, or DROP VIEW/INDEX statement.');
+    await this.run('PRAGMA foreign_keys = ON');
+    await this.run('BEGIN IMMEDIATE');
+    let changes = 0; const beforeTables = this.tables;
+    const deadline = setTimeout(() => this.db.interrupt(), 5000);
+    try {
+      await this.run(sql);
+      // sqlite3.run reports stale this.changes for RETURNING; a new statement observes the finalized write.
+      if (['INSERT', 'UPDATE', 'DELETE', 'REPLACE'].includes(first!)) changes = Number((await this.all('SELECT changes() AS count'))[0]?.count);
+      await this.loadMetadata();
+      await this.run('COMMIT');
+    } catch (error) { await this.run('ROLLBACK').catch(() => undefined); this.tables = beforeTables; throw error; }
+    finally { clearTimeout(deadline); }
+    await this.discard(); await this.refresh(); return changes;
+  }
+
+  async csvImport(table: string, text: string, mapping: CsvMapping[], nullToken?: string): Promise<number> {
+    const info = this.info(table);
+    if (!info.table.editable) throw new Error(info.table.reason ?? 'This table is read-only.');
+    const values = new CsvImport(text).values(mapping, nullToken);
+    for (const record of values) for (const [name, value] of Object.entries(record)) { this.writableColumn(info, name); this.validateValue(value); }
+    if (values.length) await this.edit(values.map(record => ({ kind: 'insert', table, values: record })));
+    return values.length;
+  }
+
+  async count(query: Query): Promise<number> {
+    const info = this.info(query.table); const source = this.source(info, true); const parts = this.queryParts(query, info);
+    if (!parts.regex.length) return this.readQuery(async () => Number((await this.all(`WITH data AS (${source.sql}) SELECT count(*) AS count FROM data${parts.where}`, [...source.params, ...parts.params]))[0]?.count), true);
+    let count = 0; let scanned = 0; let bytes = 0; const test = this.regexMatcher(parts.regex, info);
+    await this.readQuery(() => this.scan(`WITH data AS (${source.sql}) SELECT __key, ${this.projection(info)} FROM data${parts.where} LIMIT 100001`, [...source.params, ...parts.params], record => {
+      bytes += Buffer.byteLength(JSON.stringify(record)); scanned++;
+      if (scanned > 100000 || bytes > 16 * 1024 * 1024) throw new Error('Regular expression count exceeds the scan budget. Apply another filter.');
+      if (test(record)) count++;
+    }), true);
+    return count;
+  }
+
+  async search(request: SearchRequest, mode: 'find' | 'replacePreview' | 'replaceApply'): Promise<SearchResult> {
+    const info = this.info(request.table); const replacing = mode !== 'find';
+    await this.assertSearchSchema(info);
+    if (!['find', 'replacePreview', 'replaceApply'].includes(mode)) throw new Error('Choose a search operation.');
+    if (replacing && !info.table.editable) throw new Error(info.table.reason ?? 'This table is read-only.');
+    if (request.column !== undefined && !info.table.columns.some(column => column.name === request.column)) throw new Error('Choose a valid column.');
+    if (replacing && request.column !== undefined) this.writableColumn(info, request.column);
+    if (replacing && typeof request.replacement !== 'string') throw new Error('Enter replacement text.');
+    const matcher = new CellSearch(request.search, request.matchCase, replacing ? request.replacement : undefined, request.regex ?? false);
+    let query: Query = { table: request.table, offset: 0, limit: 200 };
+    let selected: Map<string, Set<string>> | undefined; let selectedRows: Row[] | undefined;
+    if (request.scope?.type === 'selection') {
+      const scope = request.scope;
+      if (!Array.isArray(scope.cells) || !scope.cells.length || scope.cells.length > 10000) throw new Error('Select between 1 and 10,000 cells.');
+      const snapshot = this.searches.page(scope.snapshot);
+      if (snapshot.schema !== info.schema) throw new Error('The database structure changed. Refresh and run the search again.');
+      if (snapshot.query.table !== request.table) throw new Error('Select cells from the current table.');
+      selected = new Map(); const rows = new Map(snapshot.rows.map(row => [row.key, row]));
+      for (const cell of scope.cells) {
+        if (!cell || !rows.has(cell.key) || !info.table.columns.some(column => column.name === cell.column)) throw new Error('The selected cells are unavailable. Reload the page and select them again.');
+        const columns = selected.get(cell.key) ?? new Set<string>(); columns.add(cell.column); selected.set(cell.key, columns);
+      }
+      const current = await this.page(snapshot.query);
+      if (!same(current.rows, snapshot.rows)) throw new Error('The selected page changed. Reload it and select the cells again.');
+      query = snapshot.query; selectedRows = snapshot.rows;
+    } else if (request.scope?.type !== 'table') throw new Error('Choose Table or Selection as the search scope.');
+    const source = this.source(info, true); const pending = this.pendingIndex(info.table.name);
+    const edits: Edit[] = []; const originals = new Map<string, Value[]>(); const samples: SearchHit[] = []; const matches: SearchMatch[] = [];
+    let count = 0; let scanned = 0; let bytes = 0; let sampleBytes = 0;
+    const fingerprint = createHash('sha256'); const deadline = Date.now() + 5000;
+    const visit = (row: Row, offset: number): void => {
+      let cost: number | undefined; let rowFingerprint: string | undefined;
+      for (const [index, column] of info.table.columns.entries()) {
+        if (Date.now() > deadline) throw new Error('Search exceeded five seconds. Search a smaller selection.');
+        if (request.column !== undefined && request.column !== column.name || selected && !selected.get(row.key)?.has(column.name)) continue;
+        const value = row.values[index]!;
+        if (replacing && (column.generated || value.type !== 'text')) continue;
+        const matched = matcher.match(value); if (!matched) continue; count++;
+        rowFingerprint ??= createHash('sha256').update(JSON.stringify([row.key, row.values])).digest('hex');
+        fingerprint.update(JSON.stringify([rowFingerprint, column.name, matched.after]));
+        cost ??= Buffer.byteLength(JSON.stringify(row));
+        if (samples.length < 1000 && sampleBytes + cost < 4 * 1024 * 1024) { sampleBytes += cost; matches.push({ row, column: column.name, offset }); samples.push({ key: row.key, column: column.name, before: matched.before.slice(0, 4096), after: matched.after.slice(0, 4096), type: value.type, offset }); }
+        if (!replacing || matched.after === matched.before) continue;
+        if (edits.length >= 10000) throw new Error('Replace at most 10,000 cells at a time. Narrow the selection or choose one column.');
+        edits.push({ kind: 'update', table: request.table, key: row.key, column: column.name, value: { type: 'text', value: matched.after } });
+        if (!pending.has(row.key)) originals.set(JSON.stringify([request.table, row.key]), row.values);
+      }
+    };
+    if (selectedRows) selectedRows.forEach((row, index) => visit(row, query.offset + index));
+    else await this.readQuery(() => this.scan(`WITH data AS (${source.sql}) SELECT __key, ${this.projection(info)} FROM data${this.queryParts(query, info).order} LIMIT 100001`, source.params, record => {
+      scanned++; bytes += Buffer.byteLength(JSON.stringify(record));
+      if (scanned > 100000 || bytes > 16 * 1024 * 1024) throw new Error('Search exceeds 100,000 scanned records or 16 MiB. Search a selection instead.');
+      visit(this.decode(info, record, scanned - 1, pending), scanned - 1);
+    }), true);
+    const digest = fingerprint.digest('hex');
+    const signature = JSON.stringify({ schema: info.schema, table: request.table, scope: request.scope, column: request.column, search: request.search, replacement: request.replacement, matchCase: request.matchCase, regex: request.regex ?? false, replacing });
+    if (mode === 'replaceApply') this.searches.validatePreview(request.preview, digest, signature);
+    if (mode === 'replaceApply' && edits.length) {
+      const observed = this.observed; const observedBytes = this.observedBytes; this.observed = new Map([...observed, ...originals]);
+      try { await this.edit(edits); } finally { this.observed = observed; this.observedBytes = observedBytes; }
+    }
+    return this.searches.rememberResults(query, matches, count, mode === 'replaceApply' ? edits.length : 0, samples, digest, signature, info.schema);
+  }
+
+  private async assertSearchSchema(info: TableInfo): Promise<void> {
+    const current = Number((await this.all('PRAGMA schema_version'))[0]?.schema_version);
+    if (current !== JSON.parse(info.schema).schemaVersion) throw new Error('The database structure changed. Refresh and run the search again.');
+  }
+
+  async searchLocate(token: string, key: string, column: string, limit: number): Promise<SearchLocation> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error('Pages support between 1 and 500 records.');
+    const { query, match, schema } = this.searches.result(token, key, column);
+    const info = this.info(query.table); await this.assertSearchSchema(info);
+    if (info.schema !== schema || !info.table.columns.some(field => field.name === column)) throw new Error('The database structure changed. Refresh and run the search again.');
+    const target = { ...query, limit, offset: Math.floor(match.offset / limit) * limit };
+    const page = await this.page(target); const row = match.offset - target.offset; const current = page.rows[row];
+    if (!current || current.key !== match.row.key || !same(current.values, match.row.values)) throw new Error('This search result changed. Run the search again before navigating.');
+    return { query: target, page, row, column };
+  }
+
+  /** Resolve relationships against SQLite's parent-column affinity and collation, then show its staged overlay. */
+  async foreignRecord(table: string, key: string, foreignKey: number): Promise<RelatedRecord> {
+    if (typeof key !== 'string' || !Number.isSafeInteger(foreignKey)) throw new Error('Choose a valid foreign key relationship.');
+    const child = this.info(table);
+    type ForeignKey = { id: number; seq: number; table: string; from: string; to: string | null };
+    const fields = (child.table.foreignKeys as ForeignKey[]).filter(field => field.id === foreignKey).sort((a, b) => a.seq - b.seq);
+    if (!fields.length) throw new Error('This foreign key relationship is unavailable.');
+    const parent = this.info(fields[0]!.table); const primary = parent.table.columns.filter(column => column.pk).sort((a, b) => a.pk - b.pk);
+    return this.readQuery(async () => {
+      const source = this.source(child, true);
+      const childRecords = await this.all(`WITH data AS (${source.sql}) SELECT __key, ${this.projection(child)} FROM data WHERE __key = ?`, [...source.params, key]);
+      if (childRecords.length !== 1) throw new Error('The selected record is unavailable. Reload the table.');
+      const row = this.decode(child, childRecords[0]!); const params: unknown[] = [];
+      const names: string[] = [];
+      const conditions = fields.map(field => {
+        const value = row.values[child.table.columns.findIndex(column => column.name === field.from)];
+        const name = field.to ?? primary[field.seq]?.name;
+        if (!name) throw new Error('The referenced key is unavailable.');
+        if (!value || value.type === 'null') throw new Error('A NULL foreign key has no related record.');
+        names.push(name);
+        let expression: string;
+        if (value.type === 'blob') { params.push(Buffer.from(value.value, 'hex')); expression = '?'; }
+        else expression = this.valueSql(value, params);
+        return `${quote(name)} = ${expression}`;
+      });
+      // The physical parent column stays on the left: SQLite applies its declared affinity and collation.
+      const matches = await this.all(`SELECT ${this.keyExpression(parent)} AS __key FROM ${quote(parent.table.name)} WHERE ${conditions.join(' AND ')} LIMIT 2`, params);
+      if (matches.length !== 1) throw new Error('No committed related record was found. Save changes to the referenced table and try again.');
+      const parentSource = this.source(parent, true);
+      const records = await this.all(`WITH data AS (${parentSource.sql}) SELECT __key, ${this.projection(parent)} FROM data WHERE __key = ?`, [...parentSource.params, matches[0]!.__key]);
+      if (records.length !== 1) throw new Error('The related record is pending deletion. Undo the deletion or save your changes.');
+      const current = this.decode(parent, records[0]!);
+      return { table: parent.table.name, filters: names.map(name => ({ column: name, mode: 'values' as const, values: [current.values[parent.table.columns.findIndex(column => column.name === name)]!] })) };
+    }, true);
+  }
+
+  async maintenance(operation: 'check' | 'vacuum'): Promise<DatabaseReport> {
+    if (!['check', 'vacuum'].includes(operation)) throw new Error('Choose a database maintenance operation.');
+    if (operation === 'vacuum') {
+      if (this.readOnly) throw new Error('Database is read-only.');
+      if (this.pending.length) throw new Error('Save or discard pending edits before vacuuming.');
+      await this.readQuery(() => this.run('VACUUM'));
+      await this.discard(); await this.refresh();
+    }
+    return this.readQuery(async () => {
+      const integrity = (await this.all('PRAGMA integrity_check')).map(row => String(Object.values(row)[0]));
+      const foreignKeys = await this.all('SELECT \"table\", CAST(rowid AS TEXT) AS rowid, parent, fkid FROM pragma_foreign_key_check');
+      const pageCount = Number((await this.all('PRAGMA page_count'))[0]?.page_count);
+      const pageSize = Number((await this.all('PRAGMA page_size'))[0]?.page_size);
+      const freePages = Number((await this.all('PRAGMA freelist_count'))[0]?.freelist_count);
+      return { integrity, foreignKeys, pageCount, pageSize, freePages, bytes: pageCount * pageSize };
+    }, true);
+  }
+
   async exportCsv(query: Query): Promise<string> {
     const info = this.info(query.table); const source = this.source(info, true); const parts = this.queryParts(query, info);
     const escape = (value: string): string => /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
     const lines = [info.table.columns.map(column => escape(column.name)).join(',')];
     let bytes = Buffer.byteLength(lines[0]!); let candidates = 0; let candidateBytes = 0; let matching = 0;
-    const test = this.regexMatcher(parts.regex, info);
+    const test = this.regexMatcher(parts.regex, info); const pending = this.pendingIndex(info.table.name);
     await this.readQuery(() => this.scan(`WITH data AS (${source.sql}) SELECT __key, ${this.projection(info)} FROM data${parts.where}${parts.order} LIMIT 100001`, [...source.params, ...parts.params], record => {
       candidates++;
       if (parts.regex.length) {
@@ -404,7 +626,7 @@ export class SqliteDatabase {
         if (!test(record)) return;
       }
       matching++;
-      const row = this.decode(info, record, matching - 1);
+      const row = this.decode(info, record, matching - 1, pending);
       const line = row.values.map(value => escape(value.type === 'null' ? '' : value.type === 'blob' ? `X'${value.value}'` : value.value)).join(',');
       bytes += Buffer.byteLength(line) + 2;
       if (bytes > MAX_BYTES || matching > 100000) throw new Error('CSV export exceeds 100,000 records or 8 MiB. Apply a filter and export again.');

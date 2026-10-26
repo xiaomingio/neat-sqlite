@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Neat SQLite: the Neat CSV gridded "N" on the navy tile; the orange corner cell becomes a small database cylinder. -->
+  <defs>
+    <clipPath id="n"><path d="M52 46h40l72 104V46h40v164h-40L92 106v104H52Z"/></clipPath>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="#263445"/>
+  <path d="M52 46h40l72 104V46h40v164h-40L92 106v104H52Z" fill="#FAF8F1" stroke="#FAF8F1" stroke-width="8" stroke-linejoin="round"/>
+  <g clip-path="url(#n)" fill="none" stroke="#C9C5B9" stroke-width="2.5">
+    <path d="M52 87h152M52 128h152M52 169h152M72 46v164M112 46v164M144 46v164M184 46v164"/>
+  </g>
+  <!-- Orange cylinder in the top-right cell. -->
+  <g>
+    <path d="M166 54a18 6 0 0 1 36 0v22a18 6 0 0 1-36 0Z" fill="#F47B20"/>
+    <path d="M166 65a18 6 0 0 0 36 0" fill="none" stroke="#FFC08A" stroke-width="2"/>
+    <ellipse cx="184" cy="54" rx="18" ry="6" fill="#FF9A4D"/>
+  </g>
+</svg>

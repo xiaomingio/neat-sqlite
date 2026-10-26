@@ -1,0 +1,3 @@
+customer_id,status,created_at,shipping_country,notes
+1,pending,2026-10-26 10:00:00,CN,Imported order for Alice
+2,paid,2026-10-26 11:00:00,DE,"Imported order, verify foreign key navigation"

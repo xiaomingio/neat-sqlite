@@ -20,18 +20,19 @@ export class Dialog {
     this.root.append(heading, this.body, this.error, this.footer);
     this.root.addEventListener('close', () => { this.onClose?.(); this.root.remove(); });
   }
-  showError(message: string): void { this.error.textContent = message; }
+  showError(message: string): void { this.error.textContent = this.locale.t(message); }
   close(): void { this.root.close(); }
   show(confirmLabel: string, submit: () => Promise<void> | void): void {
     const cancel = button(this.locale.t('Cancel'), () => this.root.close());
     const confirm = button(confirmLabel, () => {
       confirm.disabled = true; this.error.textContent = '';
       Promise.resolve().then(submit).then(() => this.root.close(), error => {
-        this.error.textContent = error instanceof Error ? error.message : String(error); confirm.disabled = false;
+        this.error.textContent = this.locale.t(error instanceof Error ? error.message : String(error)); confirm.disabled = false;
       });
     }, 'primary');
     this.footer.append(cancel, confirm); document.body.append(this.root); this.root.showModal();
-    this.root.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); confirm.click(); } });
+    // IME composition uses Enter to accept candidates; only a plain Enter confirms the dialog.
+    this.root.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!confirm.disabled) confirm.click(); } });
     requestAnimationFrame(() => (this.body.querySelector('input, textarea, select, button') as HTMLElement | null)?.focus());
   }
 }

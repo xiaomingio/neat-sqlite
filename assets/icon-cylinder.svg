@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Neat SQLite: the Neat navy tile with a gridded database cylinder and an orange top, matching the Neat CSV mark. -->
+  <defs>
+    <clipPath id="body"><path d="M58 70a70 22 0 0 1 140 0v116a70 22 0 0 1-140 0Z"/></clipPath>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="#263445"/>
+  <g clip-path="url(#body)">
+    <rect x="58" y="40" width="140" height="180" fill="#FAF8F1"/>
+    <g fill="none" stroke="#C9C5B9" stroke-width="3">
+      <path d="M58 109a70 22 0 0 0 140 0"/>
+      <path d="M58 148a70 22 0 0 0 140 0"/>
+      <path d="M93 86v133M128 92v133M163 86v133"/>
+    </g>
+  </g>
+  <ellipse cx="128" cy="70" rx="70" ry="22" fill="#F47B20"/>
+</svg>
