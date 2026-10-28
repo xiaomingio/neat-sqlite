@@ -1,0 +1,91 @@
+# Purpose: Build native VSIX packages on matching hosted runners and publish verified releases.
+name: Build and release
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish this main-branch version to GitHub Releases and Marketplace
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, target: linux-x64, arch: x64 }
+          - { runner: ubuntu-24.04-arm, target: linux-arm64, arch: arm64 }
+          - { runner: macos-15-intel, target: darwin-x64, arch: x64 }
+          - { runner: macos-15, target: darwin-arm64, arch: arm64 }
+          - { runner: windows-2022, target: win32-x64, arch: x64 }
+          - { runner: windows-11-arm, target: win32-arm64, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          architecture: ${{ matrix.arch }}
+          cache: npm
+      - name: Assert native runner
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: node -e "require('node:assert/strict').equal(process.platform + '-' + process.arch, process.env.EXPECTED_TARGET)"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm audit --audit-level=low
+      - run: npm run package
+      - name: Verify packed native runtime
+        shell: bash
+        run: npm run package:verify -- release/neat-sqlite-${{ matrix.target }}-$(node -p "require('./package.json').version").vsix ${{ matrix.target }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vsix-${{ matrix.target }}
+          path: release/*.vsix
+          if-no-files-found: error
+  publish:
+    needs: build
+    if: github.repository == 'xiaomingio/neat-sqlite' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: vsix-*
+          merge-multiple: true
+          path: release
+      - name: Check release version
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: node -e "const v='refs/tags/v'+require('./package.json').version; if(process.env.RELEASE_REF.startsWith('refs/tags/')) require('node:assert/strict').equal(process.env.RELEASE_REF,v)"
+      - name: Publish Marketplace packages
+        run: npm run publish:marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if ! gh release view "v$version" >/dev/null 2>&1; then
+            gh release create "v$version" --target "$GITHUB_SHA" --title "v$version" --generate-notes
+          fi
+          gh release upload "v$version" release/*.vsix --clobber

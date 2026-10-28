@@ -2,12 +2,12 @@
   "name": "neat-sqlite",
   "displayName": "Neat SQLite - Database Editor",
   "description": "Browse SQLite tables and safely edit records with staged changes and transaction saves.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "xiaomingio",
   "license": "AGPL-3.0-only",
   "engines": {
     "vscode": "^1.95.0",
-    "node": ">=20.17.0"
+    "node": ">=22"
   },
   "categories": [
     "Other"
@@ -50,7 +50,10 @@
     "vscode:prepublish": "npm run typecheck && npm run build",
     "package": "node scripts/package.mjs",
     "sample": "node scripts/create-sample.mjs",
-    "icon": "node scripts/render-icon.mjs"
+    "icon": "node scripts/render-icon.mjs",
+    "package:verify": "node scripts/verify-package.mjs",
+    "publish:marketplace": "node scripts/publish.mjs",
+    "publish:local": "node --env-file=.env.deploy.production scripts/publish.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",
@@ -73,7 +76,8 @@
     "@vscode/vsce": "^3.6.0",
     "esbuild": "^0.25.0",
     "tsx": "^4.20.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "yauzl": "^3.4.0"
   },
   "keywords": [
     "sqlite",

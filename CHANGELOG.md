@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Build and verify native SQLite packages for Windows, macOS, and Linux on x64 and ARM64.
+- Automate release packaging and Marketplace publishing with GitHub Actions.
+
 ## 0.1.0
 
 - Initial public release for macOS on Apple Silicon.

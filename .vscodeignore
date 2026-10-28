@@ -1,3 +1,5 @@
+.github/**
+.env*
 .git/**
 .gitignore
 AGENTS.md
