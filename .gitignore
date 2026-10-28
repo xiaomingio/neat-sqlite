@@ -5,3 +5,4 @@ test-results/
 playwright-report/
 examples/*.sqlite
 examples/*.sqlite-*
+.env.deploy.production
