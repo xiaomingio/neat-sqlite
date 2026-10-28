@@ -13,7 +13,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: release-${{ github.ref }}-${{ github.event_name }}
+  group: release-${{ github.ref }}-${{ github.sha }}-${{ github.event_name }}
   cancel-in-progress: false
 jobs:
   build:
@@ -40,7 +40,7 @@ jobs:
         env:
           EXPECTED_TARGET: ${{ matrix.target }}
         run: node -e "require('node:assert/strict').equal(process.platform + '-' + process.arch, process.env.EXPECTED_TARGET)"
-      - run: npm ci
+      - run: npm ci --foreground-scripts
       - run: npm run typecheck
       - run: npm test
       - run: npm audit --audit-level=low
