@@ -2,10 +2,9 @@
   "name": "neat-sqlite",
   "displayName": "Neat SQLite - Database Editor",
   "description": "Browse SQLite tables and safely edit records with staged changes and transaction saves.",
-  "version": "0.3.4",
+  "version": "0.1.0",
   "publisher": "xiaomingio",
   "license": "AGPL-3.0-only",
-  "private": true,
   "engines": {
     "vscode": "^1.95.0",
     "node": ">=20.17.0"
@@ -87,5 +86,13 @@
       "@azure/msal-node": "^7.1.1"
     }
   },
-  "icon": "assets/icon.png"
+  "icon": "assets/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xiaomingio/neat-sqlite.git"
+  },
+  "homepage": "https://github.com/xiaomingio/neat-sqlite",
+  "bugs": {
+    "url": "https://github.com/xiaomingio/neat-sqlite/issues"
+  }
 }

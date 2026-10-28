@@ -14,6 +14,7 @@ import { SqlWorkspace, type SqlPreferences } from './SqlWorkspace';
 import { singleLineText, renderCellText } from './CellText';
 import { SearchPanel, type SearchPreferences } from './SearchPanel';
 import { DatabaseTools } from './DatabaseTools';
+import { QuickGuide, type GuideStep } from './QuickGuide';
 type Point = { row: number; column: number };
 const PAGE_SIZE = 200;
 /** Tips keys for the top-level menus. */
@@ -48,6 +49,7 @@ export class SqliteEditor {
   private tab: 'data' | 'structure' | 'sql' = 'data';
   private sqlWorkspace?: SqlWorkspace;
   private searchPanel?: SearchPanel;
+  private guide?: QuickGuide;
   private searchOrigin?: { table: string; view: ViewState };
   /** Set while search moves the grid selection to a match, so that move does not redefine the Selection scope. */
   private locating = false;
@@ -106,7 +108,7 @@ export class SqliteEditor {
     new MutationObserver(() => { if (!this.preferences.theme) this.applyTheme(); }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
     const endDrag = () => { const wasDragging = this.dragging || this.dragAxis; this.dragging = false; this.dragAxis = undefined; if (wasDragging) this.renderSelection(); };
     window.addEventListener('pointerup', endDrag); window.addEventListener('pointercancel', endDrag);
-    document.addEventListener('pointerdown', event => { if (this.activeMenu && !this.activeMenu.contains(event.target as Node) && !(event.target as Element).closest('.menu-button, .table-chooser, .column-filter-button')) this.closeMenu(); });
+    document.addEventListener('pointerdown', event => { if (!this.guide?.open && this.activeMenu && !this.activeMenu.contains(event.target as Node) && !(event.target as Element).closest('.menu-button, .table-chooser, .column-filter-button')) this.closeMenu(); });
     document.addEventListener('keydown', event => this.keydown(event));
     this.applyTheme(); this.renderShell();
   }
@@ -214,7 +216,7 @@ export class SqliteEditor {
       else if (event.key === 'Tab') this.closeMenu();
     };
     // Closing on focus loss keeps Tab and programmatic focus moves from leaving a stale menu open.
-    menu.addEventListener('focusout', event => { const next = event.relatedTarget as Node | null; if (next && !menu.contains(next) && this.activeMenu === menu) this.closeMenu(); });
+    menu.addEventListener('focusout', event => { const next = event.relatedTarget as Node | null; if (!this.guide?.open && next && !menu.contains(next) && this.activeMenu === menu) this.closeMenu(); });
     return menu;
   }
   private closeMenu(): void { this.activeMenu?.remove(); this.activeMenu = undefined; this.menuAnchor = undefined; this.root.querySelectorAll('[aria-expanded]').forEach(node => node.setAttribute('aria-expanded', 'false')); }
@@ -816,31 +818,46 @@ export class SqliteEditor {
   private async goBack(): Promise<void> { const entry = this.navigation.pop(); if (!entry) return; await this.perform(async () => { await this.selectTable(entry.table); this.preferences.views[entry.table] = entry.view; this.persist(); await this.loadPage(); this.renderContext(); }); }
 
   private help(): void {
-    const dialog = new Dialog(this.t('Quick guide'), this.locale);
-    const lines = this.locale.language === 'zh-CN' ? [
-      '在左侧选择数据表；折叠列表后，通过菜单下方的选择框切换。',
-      '双击单元格或按 Enter/F2 编辑，并明确选择文本、整数、浮点数或 NULL。方向键、Home/End、Page Up/Down 移动选区，方向键可继续移动到相邻页。',
-      '修改在所有表之间暂存，按 Ctrl/Cmd+S 通过一个事务统一提交；保存前可以撤销或放弃。',
-      '点击字段名或行号选择整列或整行，Shift 扩展范围，Ctrl/Cmd 添加或移除；单元格也可以分别多选。完整矩形选区可以复制和粘贴。',
-      '表头第一行是字段名，第二行是类型和主键。已激活的排序、筛选按钮以橙色背景常驻；悬停或键盘聚焦时显示全部四个工具。省略号菜单集中提供排序、筛选、固定和隐藏操作。',
-      '排序按钮会把字段加入排序，再依次切换升序、降序和取消。可以同时按多个字段排序，先添加的字段优先；右键排序按钮或选择 视图 → 排序顺序… 可以调整顺序、查看 ORDER BY 并全部重置。',
-      '漏斗按钮按列筛选，不同字段的条件以 AND 组合；自定义类型可直接编辑 WHERE 条件。',
-      '拖动列宽调整宽度，双击列边缘适应内容。拖动手柄调整显示列顺序，字段选项可以固定或隐藏列。这些只影响显示，不会修改数据库中的字段顺序或结构。',
-      '工具栏会提示鼠标所在或获得焦点的控件的操作方法。',
-      '视图、虚拟表、生成列和 BLOB 仅支持查看。数据库快照只包含已保存的数据。'
-    ] : [
-      'Choose a table in the sidebar. Collapse the list to switch tables from the selector below the menu.',
-      'Double-click a cell or press Enter or F2 to edit, choosing Text, Integer, Real, or NULL explicitly. Arrow keys, Home/End and Page Up/Down move the selection; arrows continue onto adjacent pages.',
-      'Edits are staged across tables. Ctrl/Cmd+S commits them in one transaction. Undo or discard before saving.',
-      'Click column names or row numbers to select columns or rows. Shift extends a range; Ctrl/Cmd adds or removes items, including individual cells. Complete rectangles can be copied and pasted.',
-      'Each header shows the column name, then its type and primary key. Active sort and filter buttons stay visible with an orange background. Hover or focus a header to show all four tools; the three-dot menu contains sorting, filtering, pinning, and visibility options.',
-      'The sort button adds the column to the sort, then switches ascending, descending, and off. Several columns can sort together; columns added first take priority. Right-click a sort button or choose View → Sort order… to reorder keys, see the ORDER BY clause, or reset all.',
-      'Each funnel filters one column; filters on different columns combine with AND. Custom accepts a WHERE expression.',
-      'Drag a column edge to resize it, or double-click the edge to fit its content. Drag the handle to change the display order; column options pin or hide columns. These change only the view, never the column order or structure in the database.',
-      'The toolbar shows a tip for the control under the pointer or with keyboard focus.',
-      'Views, virtual tables, generated columns, and BLOB values are read-only. Database snapshots contain saved data only.'
+    if (this.guide?.open || this.busy || this.loading) return;
+    this.searchPanel?.close(); this.closeMenu();
+    const tab = this.tab, collapsed = this.preferences.collapsed, overlay = this.root.classList.contains('sidebar-overlay');
+    const scroll = { top: this.view.scrollTop, left: this.view.scrollLeft };
+    const showTab = (value: typeof tab) => { this.tab = value; this.renderLayout(); this.renderContext(); this.renderContent(); this.renderStatus(); };
+    const target = (selector: string, fallback: HTMLElement = this.viewport): HTMLElement => this.root.querySelector<HTMLElement>(selector) ?? fallback;
+    const menu = (name: string) => { const entry = [...this.menuOpeners].find(([control]) => control.textContent === this.t(name)); if (entry) this.openMenu(entry[0], entry[1]()); };
+    const heading = () => target('[data-header-column="0"]');
+    const steps: GuideStep[] = [
+      { title: 'Choose a table', text: 'Choose a table or view here. Search the list by name. Switching tables keeps your unsaved edits.',
+        enter: () => { this.preferences.collapsed = false; this.root.classList.toggle('sidebar-overlay', this.narrow.matches); this.renderLayout(); this.renderContext(); },
+        target: () => target('.table-item[aria-current="true"]', this.search),
+        leave: () => { this.preferences.collapsed = collapsed; this.root.classList.remove('sidebar-overlay'); this.renderLayout(); this.renderContext(); } },
+      { title: 'Browse and edit cells', text: 'Drag to select cells. Double-click or press Enter/F2 to edit a value as Text, Integer, Real, or NULL. Views, virtual tables, generated columns, and BLOB values are read-only.',
+        enter: () => showTab('data'), target: () => target('tbody td') },
+      { title: 'Sort, filter, and arrange columns', text: 'Sort cycles ascending, descending, and off. Funnels filter each column; conditions combine with AND. Drag handles reorder displayed columns, and column edges resize them. Orange marks active sorting and filters.',
+        enter: () => { showTab('data'); heading().classList.add('guide-heading'); }, target: heading,
+        leave: () => heading().classList.remove('guide-heading') },
+      { title: 'Column options', text: 'The three-dot menu groups sorting, filtering, pinning, visibility, and structure actions. Sorting, pinning, hiding, and dragging columns change only the view.',
+        enter: () => { showTab('data'); const column = this.columns[0], control = this.viewport.querySelector<HTMLButtonElement>('.column-options'); if (column && control) { heading().classList.add('guide-heading'); control.scrollIntoView({ block: 'nearest', inline: 'nearest' }); this.columnMenu(column, control); } },
+        target: () => this.activeMenu ?? heading(), leave: () => { this.closeMenu(); heading().classList.remove('guide-heading'); } },
+      { title: 'Browse more records', text: 'Use Previous and Next, jump to a page, or change the number of rows per page. Arrow keys can continue from the last record onto the next page.',
+        enter: () => showTab('data'), target: () => this.pagination.hidden ? this.context : this.pagination },
+      { title: 'Find and replace', text: 'Ctrl/Cmd+F finds values; Ctrl/Cmd+R opens Replace. Search the whole table or selected cells. Preview replacements, then replace one match or all matches. Table replacements stay staged until Save.',
+        enter: () => { showTab('data'); menu('Edit'); }, target: () => this.activeMenu ?? this.toolbar, leave: () => this.closeMenu() },
+      { title: 'Save your changes', text: 'Ctrl/Cmd+S saves staged edits across all tables in one transaction. Undo or discard before saving. Export writes the current view; database snapshots include committed data only.',
+        enter: () => { showTab('data'); menu('File'); }, target: () => this.activeMenu ?? this.toolbar, leave: () => this.closeMenu() },
+      { title: 'Inspect table structure', text: 'Inspect column types, primary keys, indexes, foreign keys, and CREATE SQL. Structure changes preview SQL and commit immediately after Execute; save or discard staged edits first.',
+        enter: () => showTab('structure'), target: () => target('.structure-table', this.context) },
+      { title: 'Query with SQL', text: 'Write SQL here. Ctrl/Cmd+Enter runs the selection or current statement. Queries read committed data and results are read-only. SQL writes require confirmation and commit immediately.',
+        enter: () => showTab('sql'), target: () => target('.sql-editor') },
+      { title: 'Reopen this guide', text: 'Use the ? button to reopen this guide anytime. Your original tab and layout return when the guide closes.',
+        target: () => this.toolbar.querySelector<HTMLElement>('[data-tooltip="Click: open the quick guide"]') ?? this.toolbar }
     ];
-    for (const line of lines) dialog.body.append(element('p', '', line)); dialog.show(this.t('Close'), () => {});
+    this.guide = new QuickGuide(this.root, this.locale, steps, () => {
+      this.closeMenu(); this.preferences.collapsed = collapsed; this.root.classList.toggle('sidebar-overlay', overlay);
+      showTab(tab); this.view.scrollTop = scroll.top; this.view.scrollLeft = scroll.left;
+      this.viewport.scrollTop = scroll.top; this.viewport.scrollLeft = scroll.left;
+    });
+    this.guide.show();
   }
   private async copy(headers: boolean): Promise<void> {
     const points = this.points(); if (this.selection.snapshot(this.page.rows.length, this.columns.length)?.cells) throw new Error(this.t('The selection must be a rectangle.')); const rows = [...new Set(points.map(point => point.row))].sort((a, b) => a - b); const columns = [...new Set(points.map(point => point.column))].sort((a, b) => a - b); const quote = (value: string) => /[\t\r\n"]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;

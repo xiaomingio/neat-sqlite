@@ -6,6 +6,12 @@ English | [简体中文](README.zh-CN.md)
 
 Browse, query, and edit local SQLite databases inside VS Code. Work with related tables in a compact spreadsheet, run SQL with typed results, and import or export CSV.
 
+[Install from VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=xiaomingio.neat-sqlite) · [Report an issue](https://github.com/xiaomingio/neat-sqlite/issues)
+
+The initial release supports macOS on Apple Silicon. Build from source on other platforms using the matching platform.
+
+![Browse and edit SQLite tables](assets/screenshots/workbench.png)
+
 ## Features
 
 - Browse tables and read-only views page by page, with column filters and multi-column sorting.
@@ -46,6 +52,8 @@ Regular expressions (**.\***) are off initially. Enable it for RE2 expressions a
 
 ## SQL and CSV
 
+![SQL query workspace](assets/screenshots/sql-query.png)
+
 The SQL Query tab runs one selected or current SQL statement with Ctrl/Cmd+Enter. SELECT, WITH, and VALUES read committed database data; save pending table edits to include them. Results preserve SQLite types and exact 64-bit integers. Read queries have a five-second budget, an 8 MiB result budget, and a configurable limit of up to 10,000 rows. A reached result limit is reported explicitly. **Export displayed results as CSV** exports the exact rows shown, including when a result limit was reached; it does not rerun the query.
 
 Column menus offer add, rename, and drop dialogs with a SQL preview. **Execute** applies the statement; opening the dialog or editing its fields does not change the database. SQLite handles these operations with native ALTER TABLE. Dropping a column rewrites table content internally and can fail when schema objects depend on the column.
@@ -66,7 +74,7 @@ Regular expressions use budgeted RE2 matching in the backend after SQLite applie
 
 ## Install
 
-Build a platform-specific VSIX with `npm run package`, then choose **Extensions → Install from VSIX…** in VS Code. Open a `.sqlite`, `.sqlite3`, `.db`, or `.db3` file, or run **Neat SQLite: Open Database**.
+Install **Neat SQLite - Database Editor** from the VS Code Extensions view, or build a platform-specific VSIX with `npm run package`, then choose **Extensions → Install from VSIX…** in VS Code. Open a `.sqlite`, `.sqlite3`, `.db`, or `.db3` file, or run **Neat SQLite: Open Database**.
 
 ## Development
 
@@ -86,4 +94,6 @@ The VSIX is written to `release/` for the current platform and architecture; its
 
 ## License
 
-AGPL-3.0-only. See [LICENSE](LICENSE).
+The source code is licensed under [AGPL-3.0-only](LICENSE).
+
+The Neat SQLite name and logo are not included in the code license. Use your own name and logo for derivative products and acknowledge the project.

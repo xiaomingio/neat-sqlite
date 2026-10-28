@@ -157,7 +157,31 @@ const chinese: Record<string, string> = {
   "The replaced SQL text exceeds 1 MiB. Narrow the replacement.": "替换后的 SQL 文本超过 1 MiB，请缩小替换范围。",
   "The search result is unavailable. Search again.": "查找结果不可用，请重新查找。",
   "The replacement exceeds the output size limit. Narrow the replacement.": "替换结果超过大小限制，请缩小替换范围。",
-  "The database structure changed. Refresh and run the search again.": "数据库结构已变更，请刷新后重新查找。"
+  "The database structure changed. Refresh and run the search again.": "数据库结构已变更，请刷新后重新查找。",
+  "Skip": "跳过",
+  "Next": "下一步",
+  "Done": "完成",
+  "Choose a table": "选择数据表",
+  "Choose a table or view here. Search the list by name. Switching tables keeps your unsaved edits.": "在这里选择数据表或视图，也可以按名称搜索。切换数据表会保留未保存的修改。",
+  "Browse and edit cells": "浏览和编辑单元格",
+  "Drag to select cells. Double-click or press Enter/F2 to edit a value as Text, Integer, Real, or NULL. Views, virtual tables, generated columns, and BLOB values are read-only.": "拖动选择单元格，双击或按 Enter/F2 编辑，并明确选择文本、整数、浮点数或 NULL。视图、虚拟表、生成列和 BLOB 值只读。",
+  "Sort, filter, and arrange columns": "排序、筛选和调整列",
+  "Sort cycles ascending, descending, and off. Funnels filter each column; conditions combine with AND. Drag handles reorder displayed columns, and column edges resize them. Orange marks active sorting and filters.": "排序按钮依次切换升序、降序和取消；漏斗按列筛选，各列条件以 AND 组合。拖动手柄调整显示顺序，拖动列边缘调整宽度。橙色表示已启用的排序或筛选。",
+  "The three-dot menu groups sorting, filtering, pinning, visibility, and structure actions. Sorting, pinning, hiding, and dragging columns change only the view.": "省略号菜单集中提供排序、筛选、固定、隐藏和结构操作。排序、固定、隐藏和拖动列只影响显示。",
+  "Browse more records": "浏览更多记录",
+  "Use Previous and Next, jump to a page, or change the number of rows per page. Arrow keys can continue from the last record onto the next page.": "使用上一页、下一页、跳转页码或调整每页记录数浏览数据。方向键可以从当前页最后一条记录继续移到下一页。",
+  "Find and replace": "查找与替换",
+  "Ctrl/Cmd+F finds values; Ctrl/Cmd+R opens Replace. Search the whole table or selected cells. Preview replacements, then replace one match or all matches. Table replacements stay staged until Save.": "Ctrl/Cmd+F 查找，Ctrl/Cmd+R 打开替换；支持全表或选中单元格。预览后可以逐条替换或全部替换。表格替换会暂存，保存时才写入数据库。",
+  "Save your changes": "保存修改",
+  "Ctrl/Cmd+S saves staged edits across all tables in one transaction. Undo or discard before saving. Export writes the current view; database snapshots include committed data only.": "Ctrl/Cmd+S 将所有表的暂存修改通过一个事务统一保存；保存前可以撤销或放弃。导出保存当前视图，数据库快照只包含已提交的数据。",
+  "Inspect table structure": "查看表结构",
+  "Inspect column types, primary keys, indexes, foreign keys, and CREATE SQL. Structure changes preview SQL and commit immediately after Execute; save or discard staged edits first.": "查看字段类型、主键、索引、外键和建表 SQL。结构变更提供 SQL 预览，点击执行后立即提交；执行前需要保存或放弃暂存修改。",
+  "Query with SQL": "使用 SQL 查询",
+  "Write SQL here. Ctrl/Cmd+Enter runs the selection or current statement. Queries read committed data and results are read-only. SQL writes require confirmation and commit immediately.": "在这里编写 SQL，Ctrl/Cmd+Enter 执行选区或当前语句。查询读取已提交数据，结果只读。SQL 写入需要确认，并会立即提交。",
+  "Reopen this guide": "重新打开指南",
+  "Use the ? button to reopen this guide anytime. Your original tab and layout return when the guide closes.": "随时点击 ? 按钮重新打开指南。关闭指南后会恢复原来的标签页和布局。",
+  "Got it": "知道了",
+  "Reopen this guide anytime with the ? button at the top right.": "随时点击右上角的 ? 按钮，即可重新查看指南。"
 };
 export class Locale {
   constructor(public language: 'en' | 'zh-CN' = 'en') {}

@@ -10,6 +10,7 @@ Purpose: Define compact Neat editor tokens, table navigation, editable grids and
   --code-font: var(--vscode-editor-font-family, ui-monospace, monospace);
   --size: 12px; --radius: 3px; --gap: 6px; --pad: 12px; --control-height: 27px; --row-height: 28px;
   --scrollbar-thumb: #aaaaaa; --scrollbar-size: 8px; --sidebar-width: 200px;
+  --guide-shade: #00000080; --guide-width: 340px; --guide-gap: 10px;
   --z-pinned: 1; --z-head: 2; --z-corner: 3; --z-search: 4; --z-menu: 5; --z-sidebar: 6;
 }
 :root[data-theme='dark'] {
@@ -98,7 +99,7 @@ svg.icon { display: block; width: 16px; height: 16px; fill: none; stroke: curren
 /* Only visible tools occupy header space; focusing the label reveals every keyboard action. */
 .column-tools { display: flex; flex-shrink: 0; align-items: center; gap: 1px; }
 .column-tools > .header-icon { display: none; }
-.column-tools > .header-icon.applied, .column-tools:has([aria-expanded='true']) > .header-icon, .data-grid th:hover .column-tools > .header-icon, .data-grid th:focus-within .column-tools > .header-icon { display: inline-flex; }
+.column-tools > .header-icon.applied, .column-tools:has([aria-expanded='true']) > .header-icon, .data-grid th.guide-heading .column-tools > .header-icon, .data-grid th:hover .column-tools > .header-icon, .data-grid th:focus-within .column-tools > .header-icon { display: inline-flex; }
 .sort-button { position: relative; }
 .sort-rank { position: absolute; right: 0; bottom: 0; font-size: 8px; line-height: 9px; font-weight: 700; }
 /* All header controls share one size, stroke, and colour; hover only darkens the icon. */
@@ -335,3 +336,18 @@ pre { font: var(--size)/1.6 var(--code-font); white-space: pre-wrap; overflow-wr
 /* Line-break glyphs are generated decorations; the source text remains lossless. */
 .line-break { font-size: 0; white-space: nowrap; }
 .line-break::after { content: ' ↵ '; font-size: var(--size); color: var(--muted); }
+
+/* Guided tour uses real controls under a modal spotlight. */
+.quick-guide { position: fixed; inset: 0; margin: 0; padding: 0; width: 100vw; height: 100vh; max-width: none; max-height: none; border: 0; background: transparent; color: var(--fg); overflow: hidden; }
+.quick-guide::backdrop { background: transparent; }
+.guide-spotlight { position: fixed; border: 2px solid var(--accent); border-radius: var(--radius); box-shadow: 0 0 0 100vmax var(--guide-shade); pointer-events: none; }
+.guide-panel { position: fixed; display: flex; flex-direction: column; gap: var(--pad); width: min(var(--guide-width), calc(100vw - 2 * var(--guide-gap))); max-height: calc(100vh - 2 * var(--guide-gap)); padding: var(--pad); color: var(--fg); background: var(--header); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 3px 8px var(--shadow); }
+.guide-body { overflow: auto; overflow-wrap: anywhere; min-height: 0; }
+.guide-panel > footer { display: flex; align-items: center; flex-wrap: wrap; gap: var(--gap); }
+.guide-panel > footer > button { border-color: var(--border); }
+.guide-progress { margin-right: auto; color: var(--muted); }
+.guide-arrow { position: absolute; width: 10px; height: 10px; background: var(--header); border: solid var(--border); transform: rotate(45deg); }
+.guide-panel[data-side='bottom'] .guide-arrow { top: -6px; left: calc(var(--guide-arrow-x) - 5px); border-width: 1px 0 0 1px; }
+.guide-panel[data-side='top'] .guide-arrow { bottom: -6px; left: calc(var(--guide-arrow-x) - 5px); border-width: 0 1px 1px 0; }
+.guide-panel[data-side='right'] .guide-arrow { left: -6px; top: calc(var(--guide-arrow-y) - 5px); border-width: 0 0 1px 1px; }
+.guide-panel[data-side='left'] .guide-arrow { right: -6px; top: calc(var(--guide-arrow-y) - 5px); border-width: 1px 1px 0 0; }

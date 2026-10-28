@@ -6,6 +6,12 @@
 
 在 VS Code 中浏览、查询和编辑本地 SQLite 数据库。通过紧凑的表格处理关联数据，执行自定义 SQL，并导入或导出 CSV。
 
+[在 VS Code Marketplace 安装](https://marketplace.visualstudio.com/items?itemName=xiaomingio.neat-sqlite) · [问题反馈](https://github.com/xiaomingio/neat-sqlite/issues)
+
+首个发布包支持 macOS Apple Silicon。其他平台可在对应平台从源码构建。
+
+![数据表浏览与编辑](assets/screenshots/workbench.png)
+
 ## 功能
 
 - 分页浏览数据表和只读视图，支持各列筛选和多列排序
@@ -46,6 +52,8 @@
 
 ## SQL 与 CSV
 
+![SQL 查询](assets/screenshots/sql-query.png)
+
 在 SQL 查询标签中按 Ctrl/Cmd+Enter 执行选中 SQL 或当前语句，每次执行一条。SELECT、WITH 和 VALUES 查询读取已提交的数据；保存表格修改后，查询才能看到这些修改。结果保留 SQLite 类型与 64 位整数精度。只读查询最多执行 5 秒，结果最多 8 MiB，可选择最多 10,000 行；达到行数上限时明确提示。**将当前结果导出为 CSV** 导出屏幕上已有的精确结果，不重新执行查询；达到上限的结果仅导出已显示记录。
 
 字段菜单提供添加、重命名和删除字段的简洁弹窗，展示 SQL 预览，点击“执行”后才修改数据库。操作使用 SQLite 原生 ALTER TABLE；删除字段会由 SQLite 内部重写表数据，存在依赖时可能拒绝执行。
@@ -66,7 +74,7 @@ CSV 第一行为字段名，文件最多 8 MiB、10,000 条记录。导入时映
 
 ## 安装
 
-运行 `npm run package` 构建当前平台的 VSIX，在 VS Code 中选择 **扩展 → 从 VSIX 安装…**。打开 `.sqlite`、`.sqlite3`、`.db` 或 `.db3` 文件，或运行 **Neat SQLite: Open Database** 命令。
+在 VS Code 扩展列表中安装 **Neat SQLite - Database Editor**，或运行 `npm run package` 构建当前平台的 VSIX，在 VS Code 中选择 **扩展 → 从 VSIX 安装…**。打开 `.sqlite`、`.sqlite3`、`.db` 或 `.db3` 文件，或运行 **Neat SQLite: Open Database** 命令。
 
 ## 本地开发
 
@@ -86,4 +94,6 @@ VSIX 输出至 `release/`，对应当前操作系统与 CPU 架构；包内 SQLi
 
 ## 许可证
 
-AGPL-3.0-only。详见 [LICENSE](LICENSE)。
+源代码采用 [AGPL-3.0-only](LICENSE) 开源。
+
+Neat SQLite 的名称和 Logo 不随代码授权。基于本项目开发自己的产品时，请使用自己的名称和 Logo，并注明项目来源。
