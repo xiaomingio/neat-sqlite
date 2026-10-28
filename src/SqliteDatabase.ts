@@ -2,6 +2,7 @@
 Purpose: Browse SQLite files and stage lossless edits for conflict-checked atomic saves.
 */
 import sqlite3 from 'sqlite3';
+import { SqliteRows } from './SqliteRows';
 import { SqlQuery, singleStatement } from './SqlQuery';
 import { CellSearch, type SearchMatch } from './CellSearch';
 import { searchSnippet } from './SearchSnippet';
@@ -62,16 +63,12 @@ export class SqliteDatabase {
   }
 
   private all(sql: string, params: unknown[] = []): Promise<RecordData[]> {
-    return new Promise((done, fail) => {
-      const records: RecordData[] = []; let bytes = 0; let failure: Error | undefined;
-      this.db.each(sql, params, (error: Error | null, record: RecordData) => {
-        if (failure) return;
-        if (error) { failure = error; return; }
-        bytes += Buffer.byteLength(JSON.stringify(record));
-        if (bytes > MAX_BYTES) { failure = new Error('The result exceeds 8 MiB. Reduce the page size or apply a filter.'); this.db.interrupt(); return; }
-        records.push(record);
-      }, (error: Error | null) => error || failure ? fail(failure ?? error) : done(records));
-    });
+    const records: RecordData[] = []; let bytes = 0;
+    return new SqliteRows(this.db).each<RecordData>(sql, params, record => {
+      bytes += Buffer.byteLength(JSON.stringify(record));
+      if (bytes > MAX_BYTES) throw new Error('The result exceeds 8 MiB. Reduce the page size or apply a filter.');
+      records.push(record);
+    }).then(() => records);
   }
 
   private run(sql: string, params: unknown[] = []): Promise<number> {
@@ -246,13 +243,9 @@ export class SqliteDatabase {
 
   private scan(sql: string, params: unknown[], visit: (record: RecordData) => void): Promise<void> {
     const deadline = Date.now() + 5000;
-    return new Promise((done, fail) => {
-      let failure: Error | undefined;
-      this.db.each(sql, params, (error: Error | null, record: RecordData) => {
-        if (failure) return;
-        try { if (error) throw error; if (Date.now() > deadline) throw new Error('The query exceeded five seconds. Narrow the filters.'); visit(record); }
-        catch (error) { failure = error instanceof Error ? error : new Error(String(error)); this.db.interrupt(); }
-      }, (error: Error | null) => error || failure ? fail(failure ?? error) : done());
+    return new SqliteRows(this.db).each<RecordData>(sql, params, record => {
+      if (Date.now() > deadline) throw new Error('The query exceeded five seconds. Narrow the filters.');
+      visit(record);
     });
   }
 

@@ -3,6 +3,7 @@
 ## 0.1.1
 
 - Build and verify native SQLite packages for Windows, macOS, and Linux on x64 and ARM64.
+- Preserve native query errors and cancellation across platforms by awaiting statement finalization.
 - Automate release packaging and Marketplace publishing with GitHub Actions.
 
 ## 0.1.0

@@ -2,6 +2,7 @@
 Purpose: Execute bounded, lossless SQL reads on an isolated read-only connection and validate single statements.
 */
 import sqlite3 from 'sqlite3';
+import { SqliteRows } from './SqliteRows';
 import type { SqlResult, Value } from './protocol';
 
 /** SQLite quoting rules, including comment and string boundaries, determine statement boundaries. */
@@ -52,15 +53,14 @@ export class SqlQuery {
       if (!fields.length || fields.length > 1000) throw new Error('Queries support between 1 and 1,000 result columns.');
       await run('PRAGMA query_only = ON');
       const projection = fields.map(({ name }, index) => `typeof(${quote(name)}) AS t${index}, CASE WHEN typeof(${quote(name)})='blob' THEN hex(${quote(name)}) WHEN typeof(${quote(name)})='real' THEN printf('%!.17g',${quote(name)}) ELSE CAST(${quote(name)} AS TEXT) END AS v${index}`).join(',');
-      const rows: Value[][] = []; let bytes = 0; let failure: Error | undefined;
-      await new Promise<void>((resolve, reject) => db.each(`WITH __neat_result AS MATERIALIZED (SELECT * FROM __neat_query LIMIT ${limit + 1}) SELECT ${projection} FROM __neat_result`, (error: Error | null, record: Record<string, string | null>) => {
-        if (failure) return;
-        if (error) { failure = error; return; }
+      const rows: Value[][] = []; let bytes = 0;
+      await new SqliteRows(db).each<Record<string, string | null>>(`WITH __neat_result AS MATERIALIZED (SELECT * FROM __neat_query LIMIT ${limit + 1}) SELECT ${projection} FROM __neat_result`, [], record => {
         const row = fields.map((_, index) => ({ type: record[`t${index}`] as Value['type'], value: record[`v${index}`] ?? '' }));
         bytes += Buffer.byteLength(JSON.stringify(row));
-        if (bytes > 8 * 1024 * 1024) { failure = new Error('Query results exceed 8 MiB. Reduce the result limit or select fewer columns.'); db.interrupt(); return; }
+        if (bytes > 8 * 1024 * 1024) throw new Error('Query results exceed 8 MiB. Reduce the result limit or select fewer columns.');
         rows.push(row);
-      }, (error: Error | null) => error || failure ? reject(failure ?? error) : resolve()));
+      });
+      if (this.cancelled) throw new Error('Query cancelled.');
       return { columns: fields.map(field => field.name), rows: rows.slice(0, limit), elapsedMs: Date.now() - started, truncated: rows.length > limit };
     } catch (error) {
       if (this.cancelled) throw new Error('Query cancelled.');
