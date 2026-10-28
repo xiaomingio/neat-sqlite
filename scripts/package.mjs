@@ -7,5 +7,5 @@ const targets = { 'darwin-arm64': 'darwin-arm64', 'darwin-x64': 'darwin-x64', 'l
 const target = targets[`${process.platform}-${process.arch}`];
 if (!target) throw new Error('Packaging is unsupported on this platform.');
 await mkdir('release', { recursive: true });
-const result = spawnSync(process.execPath, ['node_modules/@vscode/vsce/vsce', 'package', '--target', target, '--allow-missing-repository', '--no-rewrite-relative-links', '--out', 'release/'], { stdio: 'inherit' });
+const result = spawnSync(process.execPath, ['node_modules/@vscode/vsce/vsce', 'package', '--target', target, '--githubBranch', 'main', '--out', 'release/'], { stdio: 'inherit' });
 process.exitCode = result.status ?? 1;
