@@ -14,17 +14,21 @@ export class CellSearch {
   private readonly results = new Map<string, SearchSnapshot>();
   private readonly pattern: RE2JS;
   private readonly deadline = Date.now() + 5000;
-  constructor(search: string, matchCase: boolean, readonly replacement?: string, readonly regex = false) {
+  constructor(private readonly search: string, private readonly matchCase: boolean, readonly replacement?: string, readonly regex = false) {
     if (typeof search !== 'string' || !search.length || search.length > 65536 || typeof matchCase !== 'boolean' || typeof regex !== 'boolean' || replacement !== undefined && (typeof replacement !== 'string' || replacement.length > 65536)) throw new Error('Enter search and replacement text of at most 65,536 characters.');
     if (regex && search.length > 4096) throw new Error('Regular expressions support patterns of at most 4,096 characters.');
     this.pattern = RE2JS.compile(regex ? search : RE2JS.quote(search), matchCase ? 0 : RE2JS.CASE_INSENSITIVE);
   }
-  match(value: Value): { before: string; after: string } | undefined {
+  /** `start`/`end` locate the first match, for result highlighting. */
+  match(value: Value): { before: string; after: string; start: number; end: number } | undefined {
     if (!['text', 'integer', 'real'].includes(value.type)) return;
+    // A case-sensitive literal match is exactly a substring test, which rejects most cells far faster than RE2.
+    if (!this.regex && this.matchCase && !value.value.includes(this.search)) return;
     if (this.regex && Buffer.byteLength(value.value) > 65536) throw new Error('Regular expressions support values of at most 65,536 bytes. Choose another column or selection.');
     const matcher = this.pattern.matcher(value.value);
     if (!matcher.find()) return;
-    if (this.replacement === undefined) return { before: value.value, after: value.value };
+    const start = matcher.start(); const end = matcher.end();
+    if (this.replacement === undefined) return { before: value.value, after: value.value, start, end };
     let bytes = Buffer.byteLength(value.value);
     do {
       if (Date.now() > this.deadline) throw new Error('Search exceeded five seconds. Search a smaller selection.');
@@ -32,7 +36,7 @@ export class CellSearch {
       if (bytes > 8 * 1024 * 1024) throw new Error('A replaced value exceeds 8 MiB. Narrow the replacement.');
     } while (matcher.find());
     const after = matcher.replaceAll(this.regex ? this.replacement : RE2JS.quoteReplacement(this.replacement));
-    return { before: value.value, after };
+    return { before: value.value, after, start, end };
   }
   rememberPage(query: Query, page: Page, schema: string): void {
     const token = randomUUID(); page.snapshot = token;
@@ -52,6 +56,12 @@ export class CellSearch {
   validatePreview(token: string | undefined, fingerprint: string, signature: string): void {
     const preview = token ? this.results.get(token) : undefined;
     if (!preview || preview.signature !== signature || preview.fingerprint !== fingerprint) throw new Error('The replacement or matching cells changed. Preview it again before applying.');
+  }
+  /** A single previewed match, valid only for the exact options that produced the preview. */
+  target(token: string | undefined, key: string, column: string, signature: string): { query: Query; match: SearchMatch; schema: string } {
+    const snapshot = token ? this.results.get(token) : undefined; const match = snapshot?.matches.find(match => match.row.key === key && match.column === column);
+    if (!snapshot || !match || snapshot.signature !== signature) throw new Error('The replacement or matching cells changed. Preview it again before applying.');
+    return { query: snapshot.query, match, schema: snapshot.schema };
   }
   result(token: string, key: string, column: string): { query: Query; match: SearchMatch; schema: string } {
     const snapshot = this.results.get(token); const match = snapshot?.matches.find(match => match.row.key === key && match.column === column);

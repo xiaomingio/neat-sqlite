@@ -2,7 +2,7 @@
 Purpose: Provide a SQL editor, saved queries, cancellable execution and typed result browsing.
 */
 import { Compartment, EditorState } from '@codemirror/state';
-import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
+import { EditorView, keymap, lineNumbers, highlightActiveLine, type ViewUpdate } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, undo, redo, undoDepth, redoDepth } from '@codemirror/commands';
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { sql, SQLite } from '@codemirror/lang-sql';
@@ -28,26 +28,29 @@ export class SqlWorkspace {
   private readonly stop: HTMLButtonElement;
   private readonly exportButton: HTMLButtonElement;
   private readonly write: HTMLInputElement;
+  private deleteButton!: HTMLButtonElement;
   private running = false;
   private result?: SqlResult;
   private resultSql = '';
   private resultLimit = 1000;
+  /** Receives editor changes, so an open search can follow user edits and selections. */
+  onUpdate?: (update: ViewUpdate) => void;
   constructor(private readonly host: HostClient, private readonly locale: Locale, tables: () => Table[], private readonly status: () => Status, private readonly refresh: () => Promise<void>, private readonly preferences: SqlPreferences = {}, private readonly persist: () => void = () => {}, private readonly historyChanged: () => void = () => {}) {
     const t = (text: string) => this.locale.t(text);
     const actions = element('div', 'query-actions');
     this.run = button(t('Run query'), () => void this.execute(), 'primary'); this.run.title = t('Ctrl/Cmd+Enter: run selection or current statement');
-    this.stop = button(t('Cancel query'), () => void this.cancel()); this.stop.disabled = true;
-    this.exportButton = button(t('Export displayed results as CSV…'), () => void this.exportResults()); this.exportButton.disabled = true;
+    this.stop = button(t('Cancel'), () => void this.cancel()); this.stop.setAttribute('aria-label', t('Cancel query')); this.stop.disabled = true;
+    this.exportButton = button(t('Export CSV…'), () => void this.exportResults()); this.exportButton.title = t('Export displayed results as CSV…'); this.exportButton.disabled = true;
     this.limit.setAttribute('aria-label', t('Result limit')); for (const count of [100, 1000, 10000]) { const option = element('option', '', `${count.toLocaleString()} ${t('rows')}`); option.value = String(count); this.limit.append(option); } this.limit.value = '1000';
     const mode = element('label', 'checkbox-field'); this.write = element('input'); this.write.type = 'checkbox'; mode.append(this.write, document.createTextNode(t('Execute writes immediately')));
     actions.append(this.run, this.stop, this.exportButton, this.limit, mode);
     const library = element('div', 'query-library'); this.historySelect.setAttribute('aria-label', t('Query history')); this.savedSelect.setAttribute('aria-label', t('Saved queries'));
     this.historySelect.onchange = () => { if (this.historySelect.value) this.setSql(this.historySelect.value); };
-    this.savedSelect.onchange = () => { const entry = this.preferences.saved?.[Number(this.savedSelect.value)]; if (entry) this.setSql(entry.sql); };
-    library.append(this.historySelect, this.savedSelect, button(t('Save query…'), () => this.saveQuery()), button(t('Delete saved query'), () => { const index = Number(this.savedSelect.value); if (this.savedSelect.value !== '' && this.preferences.saved?.[index]) { this.preferences.saved.splice(index, 1); this.persist(); this.renderLibrary(); } })); this.renderLibrary();
+    this.savedSelect.onchange = () => { this.deleteButton.disabled = this.savedSelect.value === ''; const entry = this.preferences.saved?.[Number(this.savedSelect.value)]; if (entry) this.setSql(entry.sql); };
+    library.append(this.historySelect, this.savedSelect, button(t('Save query…'), () => this.saveQuery()), this.deleteButton = button(t('Delete'), () => { const index = Number(this.savedSelect.value); if (this.savedSelect.value !== '' && this.preferences.saved?.[index]) { this.preferences.saved.splice(index, 1); this.persist(); this.renderLibrary(); } })); this.deleteButton.setAttribute('aria-label', t('Delete saved query')); this.deleteButton.title = t('Delete saved query'); this.renderLibrary();
     const mount = element('div', 'sql-editor'); const schema: Record<string, string[]> = Object.create(null); for (const table of tables()) schema[table.name] = table.columns.map(column => column.name);
     const nonce = document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? '';
-    this.editor = new EditorView({ parent: mount, state: EditorState.create({ doc: this.preferences.draft ?? (tables()[0] ? `SELECT * FROM "${tables()[0]!.name.replaceAll('"', '""')}";` : 'SELECT sqlite_version();'), extensions: [lineNumbers(), highlightActiveLine(), history(), this.language.of(sql({ dialect: SQLite, schema, upperCaseKeywords: true })), autocompletion(), syntaxHighlighting(HighlightStyle.define([{ tag: tags.keyword, color: 'var(--sql-keyword)' }, { tag: [tags.string, tags.special(tags.string)], color: 'var(--sql-string)' }, { tag: [tags.number, tags.bool, tags.null], color: 'var(--sql-number)' }, { tag: tags.comment, color: 'var(--muted)' }, { tag: tags.operator, color: 'var(--fg)' }])), keymap.of([{ key: 'Mod-Enter', run: () => { void this.execute(); return true; } }, ...completionKeymap, ...defaultKeymap, ...historyKeymap]), EditorView.cspNonce.of(nonce), EditorView.contentAttributes.of({ 'aria-label': t('SQL editor') }), EditorView.domEventHandlers({ beforeinput: (event, view) => { const input = event as InputEvent; if (input.inputType !== 'insertText' || input.isComposing || input.data === null) return false; view.dispatch({ ...view.state.replaceSelection(input.data), scrollIntoView: true, userEvent: 'input.type' }); return true; } }), EditorView.updateListener.of(update => { if (update.docChanged) { this.preferences.draft = update.state.doc.toString(); this.persist(); } this.historyChanged(); })] }) });
+    this.editor = new EditorView({ parent: mount, state: EditorState.create({ doc: this.preferences.draft ?? (tables()[0] ? `SELECT * FROM "${tables()[0]!.name.replaceAll('"', '""')}";` : 'SELECT sqlite_version();'), extensions: [lineNumbers(), highlightActiveLine(), history(), this.language.of(sql({ dialect: SQLite, schema, upperCaseKeywords: true })), autocompletion(), syntaxHighlighting(HighlightStyle.define([{ tag: tags.keyword, color: 'var(--sql-keyword)' }, { tag: [tags.string, tags.special(tags.string)], color: 'var(--sql-string)' }, { tag: [tags.number, tags.bool, tags.null], color: 'var(--sql-number)' }, { tag: tags.comment, color: 'var(--muted)' }, { tag: tags.operator, color: 'var(--fg)' }])), keymap.of([{ key: 'Mod-Enter', run: () => { void this.execute(); return true; } }, ...completionKeymap, ...defaultKeymap, ...historyKeymap]), EditorView.cspNonce.of(nonce), EditorView.contentAttributes.of({ 'aria-label': t('SQL editor') }), EditorView.domEventHandlers({ beforeinput: (event, view) => { const input = event as InputEvent; if (input.inputType !== 'insertText' || input.isComposing || input.data === null) return false; view.dispatch({ ...view.state.replaceSelection(input.data), scrollIntoView: true, userEvent: 'input.type' }); return true; } }), EditorView.updateListener.of(update => { if (update.docChanged) { this.preferences.draft = update.state.doc.toString(); this.persist(); } if (update.docChanged || update.selectionSet) this.onUpdate?.(update); this.historyChanged(); })] }) });
     this.message.setAttribute('role', 'status'); this.message.textContent = t('Queries read committed data. Save table edits to include them.');
     // Native selection remains in charge; copy its raw DOM text before nowrap normalizes line breaks.
     this.results.addEventListener('copy', event => {
@@ -71,7 +74,7 @@ export class SqlWorkspace {
   private renderLibrary(): void {
     const fill = (select: HTMLSelectElement, label: string, entries: { value: string; text: string }[]) => { select.replaceChildren(); const placeholder = element('option', '', this.locale.t(label)); placeholder.value = ''; select.append(placeholder); for (const entry of entries) { const option = element('option', '', entry.text); option.value = entry.value; select.append(option); } };
     fill(this.historySelect, 'Query history', (this.preferences.history ?? []).map(sql => ({ value: sql, text: sql.slice(0, 100) })));
-    fill(this.savedSelect, 'Saved queries', (this.preferences.saved ?? []).map((entry, index) => ({ value: String(index), text: entry.name })));
+    fill(this.savedSelect, 'Saved queries', (this.preferences.saved ?? []).map((entry, index) => ({ value: String(index), text: entry.name }))); this.deleteButton.disabled = true;
   }
   /** Semicolons inside quoted identifiers, strings and comments do not end a statement. */
   private statement(): string {

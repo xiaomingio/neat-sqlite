@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import sqlite3 from 'sqlite3';
 import { SqliteDatabase } from '../src/SqliteDatabase';
 import { CsvImport } from '../src/CsvImport';
+import { searchSnippet } from '../src/SearchSnippet';
 import { RE2JS } from 're2js';
 import { RegexReplacement } from '../src/RegexReplacement';
 import { SqlQuery } from '../src/SqlQuery';
@@ -260,4 +261,23 @@ test('shared browser-safe replacement expansion agrees with RE2 substitutions an
   }
   const input = 'x'.repeat(1000) + 'a'; const matcher = RE2JS.compile('a').matcher(input); matcher.find();
   assert.throws(() => RegexReplacement.expand(matcher, input, '$`'.repeat(1000), 2000), /size limit/);
+});
+
+test('search previews keep a late first match visible and report its highlight range', () => {
+  const text = `${'x'.repeat(5000)}Needle tail`; const snippet = searchSnippet(text, text.replace('Needle', 'Pin'), 5000, 5006);
+  assert.equal(snippet.before.slice(...snippet.match!), 'Needle'); assert.ok(snippet.before.startsWith('…')); assert.ok(snippet.before.length <= 4096); assert.ok(snippet.after.includes('Pin tail'));
+  const short = searchSnippet('a Needle', 'a Needle', 2, 8); assert.deepEqual(short, { before: 'a Needle', after: 'a Needle', match: [2, 8] });
+});
+
+test('Replace one stages a single previewed cell and rejects stale previews or changed records', async () => {
+  await fixture(async engine => {
+    const request = { table: 'items', scope: { type: 'table' as const }, search: 'lice', replacement: 'X', matchCase: true };
+    const preview = await engine.search(request, 'replacePreview'); const [first, second] = preview.samples; assert.equal(preview.count, 2);
+    assert.equal((await engine.replaceOne({ ...request, preview: preview.token, target: { key: first!.key, column: 'name' } })).changes, 1); assert.equal(engine.status().pending, 1);
+    const rows = (await engine.page({ table: 'items', offset: 0, limit: 10 })).rows; assert.equal(rows[0]!.values[1]!.value, 'AX'); assert.equal(rows[1]!.values[1]!.value, 'alice');
+    await assert.rejects(engine.replaceOne({ ...request, preview: preview.token, target: { key: first!.key, column: 'name' } }), /changed/);
+    await assert.rejects(engine.replaceOne({ ...request, replacement: 'Y', preview: preview.token, target: { key: second!.key, column: 'name' } }), /Preview/);
+    await engine.save(); const fresh = await engine.search(request, 'replacePreview'); assert.equal(fresh.count, 1);
+    await engine.sqlWrite("UPDATE items SET name = 'alice!' WHERE id = 2"); await assert.rejects(engine.replaceOne({ ...request, preview: fresh.token, target: { key: fresh.samples[0]!.key, column: 'name' } }), /changed/); assert.equal(engine.status().pending, 0);
+  });
 });

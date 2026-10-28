@@ -115,6 +115,7 @@ class SqliteEditorProvider implements vscode.CustomEditorProvider<SqliteDocument
       case 'csvPreview': result.csv = new CsvImport(action.text).preview(); break;
       case 'csvImport': result.changes = await database.csvImport(action.table, action.text, action.mapping, action.nullToken); if (result.changes) this.recordEdit(document, 'Import CSV records'); break;
       case 'find': case 'replacePreview': case 'replaceApply': result.search = await database.search(action, action.type); if (result.search.changes) this.recordEdit(document, 'Replace SQLite values'); break;
+      case 'replaceOne': ({ changes: result.changes, snapshot: result.snapshot } = await database.replaceOne(action)); if (result.changes) this.recordEdit(document, 'Replace SQLite value'); break;
       case 'searchLocate': result.located = await database.searchLocate(action.token, action.key, action.column, action.limit); break;
       case 'maintenance': result.report = await database.maintenance(action.operation); if (action.operation === 'vacuum') { document.epoch++; document.notify?.(); } break;
       case 'count': result.count = await database.count(action.query); break;

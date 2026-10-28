@@ -49,6 +49,8 @@ export class SqliteEditor {
   private sqlWorkspace?: SqlWorkspace;
   private searchPanel?: SearchPanel;
   private searchOrigin?: { table: string; view: ViewState };
+  /** Set while search moves the grid selection to a match, so that move does not redefine the Selection scope. */
+  private locating = false;
   private readonly navigation: { table: string; view: ViewState }[] = [];
   private readonly selection = new CellSelection();
   private dragAxis?: 'rows' | 'columns';
@@ -463,8 +465,12 @@ export class SqliteEditor {
     const addColumn = button(this.t('Add column…'), () => this.databaseTools().column('add')); addColumn.disabled = !this.table?.editable || this.status.readOnly || this.table?.kind !== 'table'; actions.append(addColumn);
     actions.append(button(this.t('Edit structure…'), () => this.databaseTools().schema('column')), button(this.t('Create table…'), () => this.databaseTools().schema('table'))); panel.append(actions); const table = element('table', 'structure-table'); const head = element('tr');
     for (const label of ['Column', 'Type', 'Not null', 'Default', 'Primary key', 'Generated', 'Actions']) head.append(element('th', '', this.t(label))); const thead = element('thead'); thead.append(head); table.append(thead);
-    const body = element('tbody'); for (const column of this.table!.columns) { const row = element('tr'); for (const text of [column.name, column.type || 'ANY', column.notNull ? '✓' : '—', column.defaultValue ?? '—', column.pk ? String(column.pk) : '—', column.generated ? '✓' : '—']) row.append(element('td', '', text)); const controls = element('td'); const rename = button(this.t('Rename column…'), () => this.databaseTools().column('rename', column)); rename.setAttribute('aria-label', this.t('Rename column {column}', { column: column.name })); const remove = button(this.t('Delete column…'), () => this.databaseTools().column('delete', column)); remove.setAttribute('aria-label', this.t('Delete column {column}', { column: column.name })); rename.disabled = remove.disabled = !this.table?.editable || this.status.readOnly || this.table?.kind !== 'table'; controls.append(rename, remove); row.append(controls); body.append(row); } table.append(body); panel.append(table);
-    for (const [title, values, empty] of [['Indexes', this.table!.indexes, 'No indexes'], ['Foreign keys', this.table!.foreignKeys, 'No foreign keys']] as const) { panel.append(element('h3', '', this.t(title)), element('pre', '', values.length ? JSON.stringify(values, null, 2) : this.t(empty))); }
+    const body = element('tbody'); for (const column of this.table!.columns) { const row = element('tr'); for (const text of [column.name, column.type || 'ANY', column.notNull ? '✓' : '—', column.defaultValue ?? '—', column.pk ? String(column.pk) : '—', column.generated ? '✓' : '—']) row.append(element('td', '', text)); const controls = element('td'); const rename = button(this.t('Rename…'), () => this.databaseTools().column('rename', column), 'structure-action'); rename.setAttribute('aria-label', this.t('Rename column {column}', { column: column.name })); const remove = button(this.t('Delete…'), () => this.databaseTools().column('delete', column), 'structure-action'); remove.setAttribute('aria-label', this.t('Delete column {column}', { column: column.name })); rename.disabled = remove.disabled = !this.table?.editable || this.status.readOnly || this.table?.kind !== 'table'; controls.append(rename, remove); row.append(controls); body.append(row); } table.append(body); panel.append(table);
+    type IndexInfo = { name: string; unique: number; origin: string }; type KeyInfo = { id: number; table: string; from: string; to: string | null; on_update: string; on_delete: string };
+    const indexes = (this.table!.indexes as IndexInfo[]).map(index => `${index.name}${index.unique ? ' · UNIQUE' : ''}${index.origin === 'pk' ? ' · PRIMARY KEY' : index.origin === 'u' ? ' · UNIQUE constraint' : ''}`);
+    const groups = new Map<number, KeyInfo[]>(); for (const key of this.table!.foreignKeys as KeyInfo[]) groups.set(key.id, [...(groups.get(key.id) ?? []), key]);
+    const keys = [...groups.values()].map(group => `(${group.map(key => key.from).join(', ')}) → ${group[0]!.table}(${group.map(key => key.to ?? '').join(', ')})${group[0]!.on_delete && group[0]!.on_delete !== 'NO ACTION' ? ` · ON DELETE ${group[0]!.on_delete}` : ''}${group[0]!.on_update && group[0]!.on_update !== 'NO ACTION' ? ` · ON UPDATE ${group[0]!.on_update}` : ''}`);
+    for (const [title, values, empty] of [['Indexes', indexes, 'No indexes'], ['Foreign keys', keys, 'No foreign keys']] as const) { panel.append(element('h3', '', this.t(title))); if (!values.length) { panel.append(element('p', 'muted', this.t(empty))); continue; } const list = element('ul', 'structure-list'); for (const value of values) list.append(element('li', '', value)); panel.append(list); }
     panel.append(element('h3', '', this.t('Create SQL')), element('pre', '', this.table!.sql)); this.viewport.append(panel);
   }
   private renderStatus(): void {
@@ -533,6 +539,8 @@ export class SqliteEditor {
     this.viewport.querySelectorAll<HTMLElement>('[data-header-row]').forEach(cell => cell.classList.toggle('axis-selected', fullRows[Number(cell.dataset.headerRow)] ?? false));
     this.viewport.querySelectorAll<HTMLElement>('[data-header-column]').forEach(cell => cell.classList.toggle('axis-selected', fullColumns[Number(cell.dataset.headerColumn)] ?? false));
     this.renderStatus();
+    // Selecting cells while search is open redefines its Selection scope, once a drag settles.
+    if (this.searchPanel?.open && !this.locating && !this.loading && !this.dragging && !this.dragAxis) this.searchPanel.updateSelection(this.searchSelection());
   }
   /** Scroll the focused cell into view; scroll padding accounts for sticky headers and pinned columns. */
   private revealCursor(): void {
@@ -720,22 +728,30 @@ export class SqliteEditor {
   private openSearch(mode: 'find' | 'replace', fromMenu = false): void {
     if (this.tab === 'structure' || !this.table && this.tab !== 'sql') return;
     if (this.searchPanel?.open) { this.searchPanel.switchMode(mode); return; }
+    if (this.sqlWorkspace) this.sqlWorkspace.onUpdate = undefined;
     if (fromMenu) [...this.menuOpeners.keys()].find(control => control.textContent === this.t('Edit'))?.focus();
     if (this.table) this.searchOrigin = { table: this.table.name, view: structuredClone(this.view) };
     this.preferences.search ??= {};
     this.searchPanel ??= new SearchPanel(this.host, this.locale, this.preferences.search, () => this.persist(), (token, hit) => this.locateSearch(token, hit), () => this.loadPage(), () => this.restoreSearchOrigin(), () => { if (this.tab === 'sql') this.sqlWorkspace?.focus(); else this.viewport.focus({ preventScroll: true }); });
-    if (this.tab === 'sql') { this.renderContent(); this.searchPanel.show(mode, { sql: this.sqlWorkspace!.searchTarget() }); return; }
-    let selection: Extract<SearchScope, { type: 'selection' }> | undefined; let selectionError: string | undefined;
-    if (this.tab === 'data' && this.hasSelection && this.page.snapshot) { try { selection = { type: 'selection', snapshot: this.page.snapshot, cells: this.points().map(point => ({ key: this.page.rows[point.row]!.key, column: this.columns[point.column]!.name })) }; } catch { selectionError = this.t('Selection exceeds 10,000 cells. Select fewer cells to search the selection.'); } }
-    this.searchPanel.show(mode, { table: this.table!, selection, selectionError });
+    if (this.tab === 'sql') { this.renderContent(); const sql = this.sqlWorkspace!.searchTarget(); const panel = this.searchPanel; this.sqlWorkspace!.onUpdate = update => { if (!panel.open) return; const change = sql.observe(update); if (change) panel.sqlChanged(change); }; panel.show(mode, { sql }); return; }
+    this.searchPanel.show(mode, { table: this.table!, ...this.searchSelection() });
   }
-  private async locateSearch(token: string, hit: SearchHit): Promise<void> {
+  /** The exact current-page cells for the Selection scope, keyed by record identity. */
+  private searchSelection(): { selection?: Extract<SearchScope, { type: 'selection' }>; selectionError?: string } {
+    if (this.tab !== 'data' || !this.hasSelection || !this.page.snapshot) return {};
+    try { return { selection: { type: 'selection', snapshot: this.page.snapshot, cells: this.points().map(point => ({ key: this.page.rows[point.row]!.key, column: this.columns[point.column]!.name })) } }; }
+    catch { return { selectionError: this.t('Selection exceeds 10,000 cells. Select fewer cells to search the selection.') }; }
+  }
+  private async locateSearch(token: string, hit: SearchHit): Promise<(() => DOMRect | undefined) | undefined> {
     const origin = this.searchOrigin; const tableBefore = this.table; const located = (await this.host.request({ type: 'searchLocate', token, key: hit.key, column: hit.column, limit: this.pageSize })).located;
-    if (!this.searchPanel?.open || this.searchOrigin !== origin || this.table !== tableBefore) return;
+    if (!this.searchPanel?.open || this.searchOrigin !== origin || this.table !== tableBefore) return undefined;
     if (!located) throw new Error(this.t('The search result is unavailable. Search again.'));
     const table = this.tables.find(table => table.name === located.query.table); if (!table) throw new Error(this.t('The selected table is unavailable.'));
     this.table = table; this.preferences.table = table.name; this.tab = 'data'; this.view.offset = located.query.offset; this.view.pageSize = located.query.limit; this.view.sort = located.query.sort; this.view.filters = located.query.filters;
-    this.view.hidden = this.view.hidden.filter(column => column !== located.column); this.page = located.page; this.columnCache = undefined; this.selection.clear(); const column = this.columns.findIndex(column => column.name === located.column); if (column < 0 || !this.page.rows[located.row]) throw new Error(this.t('The search result is unavailable. Search again.')); this.selection.start(located.row, column); this.view.scrollTop = 0; this.persist(); this.renderShell(); this.renderContent(); this.revealCursor();
+    let column = -1; this.locating = true; try {
+    this.view.hidden = this.view.hidden.filter(column => column !== located.column); this.page = located.page; this.columnCache = undefined; this.selection.clear(); column = this.columns.findIndex(column => column.name === located.column); if (column < 0 || !this.page.rows[located.row]) throw new Error(this.t('The search result is unavailable. Search again.')); this.selection.start(located.row, column); this.view.scrollTop = 0; this.persist(); this.renderShell(); this.renderContent(); this.revealCursor();
+    } finally { this.locating = false; }
+    return () => this.cells[located.row]?.[column]?.getBoundingClientRect();
   }
   private async restoreSearchOrigin(): Promise<void> {
     const origin = this.searchOrigin; if (!origin) return; const table = this.tables.find(table => table.name === origin.table); if (!table) throw new Error(this.t('The selected table is unavailable.'));
@@ -842,7 +858,7 @@ export class SqliteEditor {
     if (quoted) throw new Error(this.t('The pasted text has an unfinished quoted field.')); if (field || row.length || !rows.length) { row.push(field); rows.push(row); } return rows;
   }
   private keydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') { this.closeMenu(); return; }
+    if (event.key === 'Escape') { if (this.activeMenu) this.closeMenu(); else if (this.searchPanel?.open && !(event.target as Element).closest('dialog')) this.searchPanel.close(); return; }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void this.run({ type: 'save' }); return; }
     if (this.tab === 'sql' && (event.target as Element).closest('.cm-editor') && (event.ctrlKey || event.metaKey) && ['f', 'r'].includes(event.key.toLowerCase())) { event.preventDefault(); this.openSearch(event.key.toLowerCase() === 'f' ? 'find' : 'replace'); return; }
     if ((event.target as Element).closest('input, textarea, select, dialog, .cm-editor')) return;

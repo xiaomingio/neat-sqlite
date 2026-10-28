@@ -2,7 +2,7 @@
   "name": "neat-sqlite",
   "displayName": "Neat SQLite - Database Editor",
   "description": "Browse SQLite tables and safely edit records with staged changes and transaction saves.",
-  "version": "0.3.2",
+  "version": "0.3.4",
   "publisher": "xiaomingio",
   "license": "AGPL-3.0-only",
   "private": true,

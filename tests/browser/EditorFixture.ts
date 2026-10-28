@@ -56,6 +56,7 @@ export class EditorFixture {
       case 'csvPreview': return { csv: new CsvImport(action.text).preview(), status: this.engine.status() };
       case 'csvImport': return { changes: await this.engine.csvImport(action.table, action.text, action.mapping, action.nullToken), status: this.engine.status() };
       case 'find': case 'replacePreview': case 'replaceApply': return { search: await this.engine.search(action, action.type), status: this.engine.status() };
+      case 'replaceOne': return { ...await this.engine.replaceOne(action), status: this.engine.status() };
       case 'searchLocate': return { located: await this.engine.searchLocate(action.token, action.key, action.column, action.limit), status: this.engine.status() };
       case 'count': return { count: await this.engine.count(action.query), status: this.engine.status() };
       case 'maintenance': return { report: await this.engine.maintenance(action.operation), status: this.engine.status() };

@@ -4,6 +4,7 @@ Purpose: Browse SQLite files and stage lossless edits for conflict-checked atomi
 import sqlite3 from 'sqlite3';
 import { SqlQuery, singleStatement } from './SqlQuery';
 import { CellSearch, type SearchMatch } from './CellSearch';
+import { searchSnippet } from './SearchSnippet';
 import { CsvImport } from './CsvImport';
 import { RE2JS } from 're2js';
 import { compileFilters } from './ColumnFilter';
@@ -519,7 +520,7 @@ export class SqliteDatabase {
         rowFingerprint ??= createHash('sha256').update(JSON.stringify([row.key, row.values])).digest('hex');
         fingerprint.update(JSON.stringify([rowFingerprint, column.name, matched.after]));
         cost ??= Buffer.byteLength(JSON.stringify(row));
-        if (samples.length < 1000 && sampleBytes + cost < 4 * 1024 * 1024) { sampleBytes += cost; matches.push({ row, column: column.name, offset }); samples.push({ key: row.key, column: column.name, before: matched.before.slice(0, 4096), after: matched.after.slice(0, 4096), type: value.type, offset }); }
+        if (samples.length < 1000 && sampleBytes + cost < 4 * 1024 * 1024) { sampleBytes += cost; matches.push({ row, column: column.name, offset }); samples.push({ key: row.key, column: column.name, ...searchSnippet(matched.before, matched.after, matched.start, matched.end), type: value.type, offset }); }
         if (!replacing || matched.after === matched.before) continue;
         if (edits.length >= 10000) throw new Error('Replace at most 10,000 cells at a time. Narrow the selection or choose one column.');
         edits.push({ kind: 'update', table: request.table, key: row.key, column: column.name, value: { type: 'text', value: matched.after } });
@@ -533,13 +534,41 @@ export class SqliteDatabase {
       visit(this.decode(info, record, scanned - 1, pending), scanned - 1);
     }), true);
     const digest = fingerprint.digest('hex');
-    const signature = JSON.stringify({ schema: info.schema, table: request.table, scope: request.scope, column: request.column, search: request.search, replacement: request.replacement, matchCase: request.matchCase, regex: request.regex ?? false, replacing });
+    const signature = this.searchSignature(info, request, replacing);
     if (mode === 'replaceApply') this.searches.validatePreview(request.preview, digest, signature);
     if (mode === 'replaceApply' && edits.length) {
       const observed = this.observed; const observedBytes = this.observedBytes; this.observed = new Map([...observed, ...originals]);
       try { await this.edit(edits); } finally { this.observed = observed; this.observedBytes = observedBytes; }
     }
     return this.searches.rememberResults(query, matches, count, mode === 'replaceApply' ? edits.length : 0, samples, digest, signature, info.schema);
+  }
+
+  private searchSignature(info: TableInfo, request: SearchRequest, replacing: boolean): string {
+    return JSON.stringify({ schema: info.schema, table: request.table, scope: request.scope, column: request.column, search: request.search, replacement: request.replacement, matchCase: request.matchCase, regex: request.regex ?? false, replacing });
+  }
+
+  /** Stage the replacement of one previewed cell after confirming its whole record is unchanged since the preview. */
+  async replaceOne(request: SearchRequest & { target: { key: string; column: string } }): Promise<{ changes: number; snapshot?: string }> {
+    const info = this.info(request.table); await this.assertSearchSchema(info);
+    if (!info.table.editable) throw new Error(info.table.reason ?? 'This table is read-only.');
+    if (typeof request.replacement !== 'string') throw new Error('Enter replacement text.');
+    const { key, column } = request.target ?? {}; if (typeof key !== 'string' || typeof column !== 'string') throw new Error('The search result is unavailable. Search again.');
+    this.writableColumn(info, column);
+    const { match, schema } = this.searches.target(request.preview, key, column, this.searchSignature(info, request, true));
+    if (schema !== info.schema) throw new Error('The database structure changed. Refresh and run the search again.');
+    const source = this.source(info, true); const pending = this.pendingIndex(info.table.name);
+    const records = await this.readQuery(() => this.all(`WITH data AS (${source.sql}) SELECT __key, ${this.projection(info)} FROM data WHERE __key = ?`, [...source.params, key]), true);
+    const row = records.length === 1 ? this.decode(info, records[0]!, 0, pending) : undefined;
+    if (!row || !same(row.values, match.row.values)) throw new Error('This search result changed. Run the search again before navigating.');
+    const value = row.values[info.table.columns.findIndex(field => field.name === column)]!; if (value.type !== 'text') throw new Error('Only text values can be replaced.');
+    const matched = new CellSearch(request.search, request.matchCase, request.replacement, request.regex ?? false).match(value);
+    if (!matched) throw new Error('This search result changed. Run the search again before navigating.');
+    const snapshot = async () => request.scope?.type === 'selection' ? (await this.page(this.searches.page(request.scope.snapshot).query)).snapshot : undefined;
+    if (matched.after === matched.before) return { changes: 0, snapshot: await snapshot() };
+    const observed = this.observed; const observedBytes = this.observedBytes;
+    if (!pending.has(row.key)) this.observed = new Map([...observed, [JSON.stringify([request.table, row.key]), row.values]]);
+    try { await this.edit([{ kind: 'update', table: request.table, key: row.key, column, value: { type: 'text', value: matched.after } }]); } finally { this.observed = observed; this.observedBytes = observedBytes; }
+    return { changes: 1, snapshot: await snapshot() };
   }
 
   private async assertSearchSchema(info: TableInfo): Promise<void> {

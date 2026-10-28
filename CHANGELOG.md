@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.4
+
+- Find and Replace is now a non-modal panel at the top right of the editor. The grid and SQL editor stay usable while it is open, and new cell or text selections update the Selection scope.
+- Replace matches one at a time: **Replace** (Ctrl/Cmd+Shift+1, or Enter in the replacement field) replaces the current match and moves to the next; **Next match** skips it. Each single replacement checks the previewed record is unchanged and supports Undo.
+
+## 0.3.3
+
+- Redesign Find and Replace as a compact dialog docked above the grid with a light backdrop. It moves out of the way of located matches, uses an icon-only close button and Aa / .* option toggles (Alt+C / Alt+R), shows notes only when needed, and highlights the matched text in results.
+- Enter steps through matches after a search, with Shift+Enter for the previous match; arrow keys move within the result list. Keyboard focus no longer drops out of the dialog while results load or matches are located.
+- Results show a centered snippet, so matches beyond the first 4,096 characters of a value remain visible. SQL text results show the matching line.
+- Speed up case-sensitive literal table search by skipping cells without a substring match before RE2.
+- Translate search validation errors into Simplified Chinese.
+- Shorten Structure and SQL toolbar labels, and show indexes and foreign keys as readable lists instead of raw JSON.
+
 ## 0.3.2
 
 - Restore Find and Replace to one centered modal dialog, with Escape and Close returning focus to the opener. Searching leaves the table layout unchanged.
