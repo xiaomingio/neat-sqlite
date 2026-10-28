@@ -8,7 +8,7 @@ Browse, query, and edit local SQLite databases inside VS Code. Work with related
 
 [Install from VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=xiaomingio.neat-sqlite) · [Report an issue](https://github.com/xiaomingio/neat-sqlite/issues)
 
-The initial release supports macOS on Apple Silicon. Build from source on other platforms using the matching platform.
+Available for Windows, macOS, and Linux on x64 and ARM64. VS Code installs the package for your platform automatically.
 
 ![Browse and edit SQLite tables](assets/screenshots/workbench.png)
 
@@ -78,7 +78,7 @@ Install **Neat SQLite - Database Editor** from the VS Code Extensions view, or b
 
 ## Development
 
-Use Node.js 20.17 or newer and npm:
+Use Node.js 22 or newer and npm:
 
 ```sh
 npm install

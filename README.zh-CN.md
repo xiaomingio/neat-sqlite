@@ -8,7 +8,7 @@
 
 [在 VS Code Marketplace 安装](https://marketplace.visualstudio.com/items?itemName=xiaomingio.neat-sqlite) · [问题反馈](https://github.com/xiaomingio/neat-sqlite/issues)
 
-首个发布包支持 macOS Apple Silicon。其他平台可在对应平台从源码构建。
+支持 Windows、macOS 和 Linux 的 x64 与 ARM64 架构。VS Code 会自动安装与你的平台匹配的扩展包。
 
 ![数据表浏览与编辑](assets/screenshots/workbench.png)
 
@@ -78,7 +78,7 @@ CSV 第一行为字段名，文件最多 8 MiB、10,000 条记录。导入时映
 
 ## 本地开发
 
-需要 Node.js 20.17 及以上版本和 npm：
+需要 Node.js 22 及以上版本和 npm：
 
 ```sh
 npm install
